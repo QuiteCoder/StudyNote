@@ -130,7 +130,8 @@ handleResumeActivity:3816, ActivityThread (android.app)
 class ActivityThread {
     @Override
     public void handleResumeActivity(...) {
-        //a是一个activity对象，每个activity都有一个WindowManager,跟踪到Activity的源码发现，这个wm其实是WindowManagerImpl，其内部的addView方法是调用了单例对象WindowManagerGlobal的addViwe方法
+        //a是一个activity对象，每个activity都有一个WindowManager,跟踪到Activity的源码发现，
+        //这个wm其实是WindowManagerImpl，其内部的addView方法是调用了单例对象WindowManagerGlobal的addViwe方法
         ViewManager wm = a.getWindowManager();
         ...
         wm.addView(decor, l);
