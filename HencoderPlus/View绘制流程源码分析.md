@@ -6,6 +6,10 @@
 
 因为掌握了这个知识点就可以用子线程更新UI了，已知View.requestLayout-->ViewRootImpl.checkThread才会报UI不能在子线程更新UI的Exception。
 
+## 流程图
+
+![image](https://github.com/QuiteCoder/StudyNote/blob/main/HencoderPlus/IMG_View%E7%BB%98%E5%88%B6%E6%B5%81%E7%A8%8B%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90/1.png)
+
 ## ActivityThread、Activity
 
 ```java
@@ -153,4 +157,3 @@ class WindowManagerGlobal {
 
 ```
 
-![image](https://github.com/QuiteCoder/StudyNote/blob/main/HencoderPlus/IMG_View%E7%BB%98%E5%88%B6%E6%B5%81%E7%A8%8B%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90/1.png)
