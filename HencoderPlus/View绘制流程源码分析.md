@@ -143,8 +143,8 @@ class ActivityThread {
     }
 }
 
-//
 class WindowManagerGlobal {
+    //WindowManagerGlobal的addViwe方法
     public void addView(View view, ViewGroup.LayoutParams params,
             Display display, Window parentWindow) {
         root = new ViewRootImpl(view.getContext(), display);
@@ -154,6 +154,69 @@ class WindowManagerGlobal {
     }
 }
 
+//这个类就是控制view的生命周期
+class WindowManagerImpl {
+    //测量
+    private void performMeasure(int childWidthMeasureSpec, int childHeightMeasureSpec) {
+        if (mView == null) {
+            return;
+        }
+        Trace.traceBegin(Trace.TRACE_TAG_VIEW, "measure");
+        try {
+            mView.measure(childWidthMeasureSpec, childHeightMeasureSpec);
+        } finally {
+            Trace.traceEnd(Trace.TRACE_TAG_VIEW);
+        }
+    }
+    //布局
+    private void performLayout(WindowManager.LayoutParams lp, int desiredWindowWidth,
+            int desiredWindowHeight) {
+        ...
+        final View host = mView;
+        if (host == null) {
+            return;
+        }
+        ...
+        host.layout(0, 0, host.getMeasuredWidth(), host.getMeasuredHeight());
+        ...
+        view.requestLayout();
+    }
+    //绘制
+    private void performDraw() {
+        ...
+        boolean canUseAsync = draw(fullRedrawNeeded);
+    }
+    
+    @Override
+    public void requestLayout() {
+        if (!mHandlingLayoutInLayoutRequest) {
+            checkThread();
+            mLayoutRequested = true;
+            scheduleTraversals();
+        }
+    }
+}
+```
 
+//接下来就是解释为什么子线程能刷新UI
+条件：在子线程能够刷新UI的终极条件是不能触发WindowManagerImpl的requestLayout()方法，  因为requestLayout的时候会调用checkThread方法检查线程；
+注意：1、如果控件是固定大小的，子线程能刷新UI，但是关闭硬件加速之后依然会报错，原理也是一样，不支持硬件加速后会跑requestLayout，支持硬件加速时只调用scheduleTraversals()；
+
+​			2、可以先在主线程requestLayout之后再放到主线程更新UI，原理是让ViewRootImpl的requestLayout时判断mHandlingLayoutInLayoutRequest=true，这是google防 止UI连续请求绘制做的一个优化，这样做就是在卡漏洞
+
+​			3、由于ViewRootImpl的线程检测是用创建者线程与调用requestLayout线程做比较，如果要做子线程刷新UI，可以在子线程中创建ViewRootImpl，再让此线程刷新UI
+
+```kotlin
+thread {
+    Looper.prepare()
+    var button = Button(this)
+    button.text = "init"
+    val layoutParams = WindowManager.LayoutParams()
+    windowManager.addView(button,WindowManager.LayoutParams())
+    button.setOnClickListener {
+        button.text = "${Thread.currentThread().name}:${SystemClock.uptimeMillis()}"
+    }
+    Looper.loop()
+}
 ```
 
