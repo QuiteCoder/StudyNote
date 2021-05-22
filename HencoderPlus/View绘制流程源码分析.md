@@ -2,7 +2,7 @@
 
 ## 背景 
 
-为了研究activity的生命周期与view的measure、draw、layout的关联，和研究什么时候才会出发view的requestLayout方法，
+为了研究activity的生命周期与view的measure、draw、layout的关联，和研究什么时候才会触发view的requestLayout方法，
 
 因为掌握了这个知识点就可以用子线程更新UI了，已知View.requestLayout-->ViewRootImpl.checkThread才会报UI不能在子线程更新UI的Exception。
 
@@ -199,12 +199,39 @@ class WindowManagerImpl {
 ```
 
 //接下来就是解释为什么子线程能刷新UI
-条件：在子线程能够刷新UI的终极条件是不能触发WindowManagerImpl的requestLayout()方法，  因为requestLayout的时候会调用checkThread方法检查线程；
-注意：1、如果控件是固定大小的，子线程能刷新UI，但是关闭硬件加速之后依然会报错，原理也是一样，不支持硬件加速后会跑requestLayout，支持硬件加速时只调用scheduleTraversals()；
+条件：在子线程能够刷新UI的终极条件是不能触发WindowManagerImpl的requestLayout()方法，  因为requestLayout的时候会调用**checkThread**方法检查线程；
 
-​			2、可以先在主线程requestLayout之后再放到主线程更新UI，原理是让ViewRootImpl的requestLayout时判断mHandlingLayoutInLayoutRequest=true，这是google防 止UI连续请求绘制做的一个优化，这样做就是在卡漏洞
 
-​			3、由于ViewRootImpl的线程检测是用创建者线程与调用requestLayout线程做比较，如果要做子线程刷新UI，可以在子线程中创建ViewRootImpl，再让此线程刷新UI
+
+**以下场景能子线程刷新UI：**
+
+1、如果控件是固定大小的，子线程能刷新UI，但是关闭硬件加速之后依然会报错，原理也是一样，不支持硬件加速后会跑requestLayout，支持硬件加速时只调用scheduleTraversals()；
+
+```kotlin
+text.text = "onCreate thread = " + Thread.currentThread()
+text.setOnClickListener {
+     //view配置了固定大小，子线程刷新UI不会报错，注意清单文件要打开硬件加速android:hardwareAccelerated="true"
+     thread {
+         text.text = "onClick thread = " + Thread.currentThread()
+     }
+}
+```
+
+2、可以先在主线程requestLayout之后再放到主线程更新UI，原理是让ViewRootImpl的requestLayout时判断mHandlingLayoutInLayoutRequest=true，这是google防 止UI连续请求绘制做的一个优化，这样做就是在卡漏洞
+
+```kotlin
+text.text = "onCreate thread = " + Thread.currentThread()
+text.setOnClickListener {
+    //view配置了wrap_content，子线程刷新UI会报错
+    //但是主线程更新完UI，立马给子线程更新是不会报错的
+    text.text = "onCreate thread = " + Thread.currentThread()
+    thread {
+        text.text = "onClick thread = " + Thread.currentThread()
+    }
+}
+```
+
+3、由于ViewRootImpl的线程检测是用创建者线程与调用requestLayout线程做比较，如果要做子线程刷新UI，可以在子线程中创建ViewRootImpl，再让此线程刷新UI
 
 ```kotlin
 thread {

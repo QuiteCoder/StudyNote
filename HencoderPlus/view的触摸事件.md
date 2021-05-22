@@ -28,7 +28,7 @@ override fun onTouchEvent(event: MotionEvent?): Boolean {
 
 //扩展
 event.action:不支持多点触控
-event.actionMasked：支持多点触控，用这个最为安全
+event.actionMasked：支持多点触控，用这个最为安全，例如用两个手指缩放图片
 
 mTouchDelegate是触摸代理，为了扩大view的点击区域
 
