@@ -10,7 +10,7 @@
 
 ## TCP/IP的分层模型图：
 
-
+![](https://github.com/QuiteCoder/StudyNote/blob/697b24c39dadc9bdcd73a57e7c215ae04dc51e2e/HencoderPlus/IMG_%E8%AE%A4%E8%AF%86TCPIP%E5%8D%8F%E8%AE%AE%E6%97%8F%E4%BB%A5%E5%8F%8AHTTPS/tcp-ip%E5%88%86%E5%B1%82%E6%A8%A1%E5%9E%8B.png)
 
 从上面TCP、UDP编程步骤可以看出，UDP 服务器端不需要调用监听(listen)和接收(accept)客户端连接，而客户端也不需要连接服务器端(connect)。UDP协议中，任何一方建立socket后，都可以用sendto发送数据、用recvfrom接收数据，不必关心对方是否存在，是否发送了数据。
 
