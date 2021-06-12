@@ -152,24 +152,8 @@ final class AsyncCall extends NamedRunnable {
         signalledCallback = true;
         responseCallback.onResponse(RealCall.this, response);
       } catch (IOException e) {
-        if (signalledCallback) {
-          // Do not signal the callback twice!
-          Platform.get().log(INFO, "Callback failure for " + toLoggableString(), e);
-        } else {
-          responseCallback.onFailure(RealCall.this, e);
-        }
-      } catch (Throwable t) {
-        cancel();
-        if (!signalledCallback) {
-          IOException canceledException = new IOException("canceled due to " + t);
-          canceledException.addSuppressed(t);
-          responseCallback.onFailure(RealCall.this, canceledException);
-        }
-        throw t;
-      } finally {
-        client.dispatcher().finished(this);
-      }
-    }
+      ...
+      ...
 }
 ```
 
@@ -186,15 +170,18 @@ Response getResponseWithInterceptorChain() throws IOException {
     interceptors.addAll(client.interceptors());
     //这些拦截器相当于将一个网络请求分步骤来做，每个interceptor分工都不一样，下面一一分析
     interceptors.add(new RetryAndFollowUpInterceptor(client));
+    //封装和拼接请求头
     interceptors.add(new BridgeInterceptor(client.cookieJar()));
+    //缓存
     interceptors.add(new CacheInterceptor(client.internalCache()));
+    //查找可用连接
     interceptors.add(new ConnectInterceptor(client));
     if (!forWebSocket) {
       interceptors.addAll(client.networkInterceptors());
     }
     interceptors.add(new CallServerInterceptor(forWebSocket));
 
-    //这是一个对拦截器的管理和执行，
+    //对拦截器的管理和执行，
     Interceptor.Chain chain = new RealInterceptorChain(interceptors, transmitter, null, 0,
         originalRequest, this, client.connectTimeoutMillis(),
         client.readTimeoutMillis(), client.writeTimeoutMillis());
@@ -203,25 +190,15 @@ Response getResponseWithInterceptorChain() throws IOException {
     try {
       //开始执行interceptors
       Response response = chain.proceed(originalRequest);
-      if (transmitter.isCanceled()) {
-        closeQuietly(response);
-        throw new IOException("Canceled");
-      }
-      return response;
-    } catch (IOException e) {
-      calledNoMoreExchanges = true;
-      throw transmitter.noMoreExchanges(e);
-    } finally {
-      if (!calledNoMoreExchanges) {
-        transmitter.noMoreExchanges(null);
-      }
-    }
+     .....
   }
 ```
 
 
 
 ### 1、RetryAndFollowUpInterceptor
+
+出错重试、重定向
 
 ```java
 public final class RetryAndFollowUpInterceptor implements Interceptor {
@@ -232,7 +209,7 @@ public final class RetryAndFollowUpInterceptor implements Interceptor {
 
     int followUpCount = 0;
     Response priorResponse = null;
-    //循环
+    //因为考虑重定向，这里用死循环直到连接到最终的主机，要么
     while (true) {
       transmitter.prepareToConnect(request);
 
@@ -403,7 +380,7 @@ public final class BridgeInterceptor implements Interceptor {
 
 ### 3、CacheInterceptor
 
-只要工作是保存response和返回可用没过期的espouse
+主要工作是保存Response和返回可用没过期的Respouse
 
 
 
@@ -424,7 +401,7 @@ public final class ConnectInterceptor implements Interceptor {
 
     // We need the network to satisfy this request. Possibly for validating a conditional GET.
     boolean doExtensiveHealthChecks = !request.method().equals("GET");
-    //这一步创建了Exchage，是重点
+    //这一步创建了Exchange，是重点
     Exchange exchange = transmitter.newExchange(chain, doExtensiveHealthChecks);
 
     return realChain.proceed(request, transmitter, exchange);
@@ -462,7 +439,9 @@ public final class Transmitter {
 
 
 
-### 5、ExchangeFinder（做http连接的操作）
+### 5、ExchangeFinder
+
+找到一个可用的连接，创建RealConnection，准备进行TCP连接或者TCP + TLS连接
 
 ```java
 final class ExchangeFinder {
@@ -509,6 +488,7 @@ final class ExchangeFinder {
       // Do a (potentially slow) check to confirm that the pooled connection is still good. If it
       // isn't, take it out of the pool and start again.
       //如果不健康的连接就继续findConnection
+      //1、判读连接有没有关闭？socket连接读/一半被关闭？  2、ping  pong心跳是否正常？
       if (!candidate.isHealthy(doExtensiveHealthChecks)) {
         candidate.noNewExchanges();
         continue;
@@ -533,10 +513,12 @@ final class ExchangeFinder {
       // Attempt to use an already-allocated connection. We need to be careful here because our
       // already-allocated connection may have been restricted from creating new exchanges.
       releasedConnection = transmitter.connection;
+      //新连接与旧连接的不相同时就将旧的连接断开
       toClose = transmitter.connection != null && transmitter.connection.noNewExchanges
           ? transmitter.releaseConnectionNoEvents()
           : null;
 
+      //否则旧链接继续使用
       if (transmitter.connection != null) {
         // We had an already-allocated connection and it's good.
         result = transmitter.connection;
@@ -545,12 +527,13 @@ final class ExchangeFinder {
 
       if (result == null) {
         // Attempt to get a connection from the pool.
-        //从连接池里面取可用的连接，
+        //第一次从连接池里面取可用的连接，
         //注意：这里传递的List<Route>参数是null，因为Route包含proxy、ip、端口，所以这里是拿不到代理类型的连接的；  第二参数是RequestMulitplexed,boolean类型，传了false，代表不支持多路复用，多路复用是在http2.0才有的
         if (connectionPool.transmitterAcquirePooledConnection(address, transmitter, null, false)) {
           foundPooledConnection = true;
           result = transmitter.connection;
         } else if (nextRouteToTry != null) {
+          //使用缓存的nextRouteToTry，节省资源
           selectedRoute = nextRouteToTry;
           nextRouteToTry = null;
         } else if (retryCurrentRoute()) {
@@ -575,6 +558,7 @@ final class ExchangeFinder {
     boolean newRouteSelection = false;
     if (selectedRoute == null && (routeSelection == null || !routeSelection.hasNext())) {
       newRouteSelection = true;
+      //获取路由，routeSelection包含多个Route，每个route都含有proxy、ip、端口
       routeSelection = routeSelector.next();
     }
 
@@ -586,6 +570,7 @@ final class ExchangeFinder {
         // Now that we have a set of IP addresses, make another attempt at getting a connection from
         // the pool. This could match due to connection coalescing.
         routes = routeSelection.getAll();
+          //第二次从连接池里面取可用的连接，因为这次传了routes，就可以获取池子里支持连接合并的http2连接了
         if (connectionPool.transmitterAcquirePooledConnection(
             address, transmitter, routes, false)) {
           foundPooledConnection = true;
@@ -606,12 +591,14 @@ final class ExchangeFinder {
     }
 
     // If we found a pooled connection on the 2nd time around, we're done.
+    //如果通过上面两次从连接池里拿到就返回可用连接，否则自行创建连接
     if (foundPooledConnection) {
       eventListener.connectionAcquired(call, result);
       return result;
     }
 
     // Do TCP + TLS handshakes. This is a blocking operation.
+    //做TCP + TLS 加密连接（HTTPS），这是一个堵塞操作。
     result.connect(connectTimeout, readTimeout, writeTimeout, pingIntervalMillis,
         connectionRetryEnabled, call, eventListener);
     connectionPool.routeDatabase.connected(result.route());
@@ -621,6 +608,8 @@ final class ExchangeFinder {
       connectingConnection = null;
       // Last attempt at connection coalescing, which only occurs if we attempted multiple
       // concurrent connections to the same host.
+      //注意：这里再次从连接池里拿可用连接，传递的List<Route>参数是routes；  第二参数是RequestMulitplexed,boolean类型，传了true，只拿支持多路复用的连接，如果拿到了就废弃上面创建的连接，使用池子里边的连接，这是一种节省资源的操作。
+      //节省资源的原理是这样的：网络请求是多线程操作，如果短时间内有两个以上相同ip端口的连接，第一次创建完丢池子里，短时间来了第二次相同的连接，那么就取支持多路复用的连接，来做网络通讯
       if (connectionPool.transmitterAcquirePooledConnection(address, transmitter, routes, true)) {
         // We lost the race! Close the connection we created and return the pooled connection.
         result.noNewExchanges = true;
@@ -629,8 +618,10 @@ final class ExchangeFinder {
 
         // It's possible for us to obtain a coalesced connection that is immediately unhealthy. In
         // that case we will retry the route we just successfully connected with.
+        //因为池子里有多路复用的连接，本次用selectedRoute创建的连接被抛弃，但是这个route不能扔掉，用nextRouteToTry缓存起来，下次连接继续使用，节省资源
         nextRouteToTry = selectedRoute;
       } else {
+        //把新连接放到连接池里
         connectionPool.put(result);
         transmitter.acquireConnectionNoEvents(result);
       }
@@ -642,6 +633,115 @@ final class ExchangeFinder {
   }
 }
 ```
+
+
+
+### 6、RealConnection
+
+进行TCP连接或者TCP + TLS连接
+
+```java
+public void connect(int connectTimeout, int readTimeout, int writeTimeout,
+    int pingIntervalMillis, boolean connectionRetryEnabled, Call call,
+    EventListener eventListener) {
+ ...
+ ...
+
+  while (true) {
+    try {
+      //是否需要HTTP转HTTPS，这是http1.1的新功能：HTTP隧道
+      if (route.requiresTunnel()) {
+        connectTunnel(connectTimeout, readTimeout, writeTimeout, call, eventListener);
+        if (rawSocket == null) {
+          // We were unable to connect the tunnel but properly closed down our resources.
+          break;
+        }
+      } else {
+        //一般情况是跑这个函数，首先判读代理类型，直连还是代理？从而创建有无代理的socket进行初步连接，相当于Server Hello
+        connectSocket(connectTimeout, readTimeout, call, eventListener);
+      }
+      //判读是否加密连接？是否HTTP2连接
+      establishProtocol(connectionSpecSelector, pingIntervalMillis, call, eventListener);
+      eventListener.connectEnd(call, route.socketAddress(), route.proxy(), protocol);
+      break;
+    } catch (IOException e) {
+      ...
+  }
+      ...
+}
+
+private void establishProtocol(ConnectionSpecSelector connectionSpecSelector,
+      int pingIntervalMillis, Call call, EventListener eventListener) throws IOException {
+    if (route.address().sslSocketFactory() == null) {
+      //如果不是加密连接，并且是HTTP2连接
+      if (route.address().protocols().contains(Protocol.H2_PRIOR_KNOWLEDGE)) {
+        socket = rawSocket;
+        protocol = Protocol.H2_PRIOR_KNOWLEDGE;
+        //给服务器发个数据“我HTTP2连接”
+        //源码：  static final ByteString CONNECTION_PREFACE = ByteString.encodeUtf8("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n");
+        //具体看Http2Writer的connectionPreface()函数
+        startHttp2(pingIntervalMillis);
+        return;
+      }
+
+      socket = rawSocket;
+      protocol = Protocol.HTTP_1_1;
+      return;
+    }
+
+    eventListener.secureConnectStart(call);
+    //进行加密连接，验证证书，确定连接协议
+    connectTls(connectionSpecSelector);
+    eventListener.secureConnectEnd(call, handshake);
+	//给服务器发个数据“我HTTP2连接”
+    if (protocol == Protocol.HTTP_2) {
+      startHttp2(pingIntervalMillis);
+    }
+  }
+```
+
+
+
+## 总结：
+
+
+1、创建的AsyncCall丢进Dispatcher，管理call的执行，Dispather做了两个判断：
+一是当前运行的call有没有超过最大请求数？默认是64，
+二是有没有超过单个主机的最大请求数？默认是5，两者都有方法自定义。
+
+2、这个AsyncCall的父类是继承Runnnable，因为网络连接是堵塞性的操作，
+这里关注的getResponseWithInterceptorChain( )方法了，
+返回是的就是我们所需要的Response对象
+
+3、准备建立TCP或者TCP+SSL连接
+okhttp的用了很巧妙的设计，分了几个步骤用一个List存起来，然后链路执行每一个步骤
+
+3.1、RetryAndFollowUpInterceptor：出错重试、做重定向的重连，和一些异常的处理，包
+括请求超时IOException、连接失败RouteException、超过重定向最大值ProtocolException
+
+3.2、BridgeInterceptor：拼接请求头了，包括"Content-Type"、"Content-Length"、"Transfer-Encoding"、"Accept-Encoding"、"Cookie"
+
+另外自动添加"gzip" Header，省流量、加快请求和响应
+
+3.3、CacheInterceptor：保存Response和返回可用Respouse
+
+3.4、ConnectInterceptor：创建Exchange（我理解是网络数据交换），
+Exchange需要ExchangeFinder创建ExchangeCodec
+
+3.5、ExchangeFinder：真正的去进行网络连接了
+
+4、connectionPool是一个连接池，首先去池子拿，没有再创建新的连接，
+
+5、创建连接有多种情况：
+5.1、想要创建http转https的连接？httpTunnel是http1.1的功能
+5.2、创建TCP连接不加密？包含http1和http2
+5.2、创建TCP连接并且是SSL加密？https
+
+6、最后是sslSocket.startHandshake( )，验证证书，SSL协议就建立完成！
+
+7、CallServerInterceptor：通过建立完成的连接(Exchange)，可以给服务器发数据了
+
+
 
 ## 附录：介绍OkHttpClient
 
