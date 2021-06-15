@@ -474,7 +474,7 @@ final class OkHttpCall<T> implements Call<T> {
 
 
 
-总结：
+## 总结：
 
 Retrofit总结
 1、Retrofit.create：首先对我们创建的请求interface检查合法性
