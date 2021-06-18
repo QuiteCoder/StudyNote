@@ -8,7 +8,7 @@
 
 ## 流程图
 
-![image](https://github.com/QuiteCoder/StudyNote/blob/main/HencoderPlus/IMG_View%E7%BB%98%E5%88%B6%E6%B5%81%E7%A8%8B%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90/1.png)
+![image](https://raw.githubusercontent.com/QuiteCoder/MyMdImages/main/View%E7%9A%84%E7%BB%98%E5%88%B6%E6%B5%81%E7%A8%8B.png)
 
 ## ActivityThread、Activity
 
