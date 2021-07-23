@@ -10,6 +10,30 @@
 
 ![image](https://raw.githubusercontent.com/QuiteCoder/MyMdImages/main/View%E7%9A%84%E7%BB%98%E5%88%B6%E6%B5%81%E7%A8%8B.png)
 
+
+
+流程：
+
+1、AMS通过binder告诉ActivityThread创建Activity
+
+2、在performLaunchActivity()中委托Instrumentation通过反射构建出Activity的实例
+
+3、然后Actiity实例先是调用了attach方法，构建出了PhoneWIndow
+
+4、Actiity调用onCreate方法，开始setContentView()
+
+5、初始DecorView，PhoneWindow.installDecor()
+
+6、Activity调用onResume方法，WindowManagerGlobal调用addView方法构建ViewRootImpl，并让其管理DecorView
+
+7、ViewRootImpl.setView()，先执行requestLayout()，依次对view进行测量、布局、绘制，接着通过Bindler给WindowManagerSerivce.addWindow()
+
+
+
+
+
+
+
 ## ActivityThread、Activity
 
 ```java
@@ -152,10 +176,59 @@ class WindowManagerGlobal {
         root.setView(view, wparams, panelParentView);
         ...
     }
+    
+    @UnsupportedAppUsage
+    public static IWindowSession getWindowSession() {
+        synchronized (WindowManagerGlobal.class) {
+            if (sWindowSession == null) {
+                try {
+                    // Emulate the legacy behavior.  The global instance of InputMethodManager
+                    // was instantiated here.
+                    // TODO(b/116157766): Remove this hack after cleaning up @UnsupportedAppUsage
+                    InputMethodManager.ensureDefaultInstanceForDefaultDisplayIfNecessary();
+                    IWindowManager windowManager = getWindowManagerService();
+                    sWindowSession = windowManager.openSession(
+                            new IWindowSessionCallback.Stub() {
+                                @Override
+                                public void onAnimatorScaleChanged(float scale) {
+                                    ValueAnimator.setDurationScale(scale);
+                                }
+                            });
+                } catch (RemoteException e) {
+                    throw e.rethrowFromSystemServer();
+                }
+            }
+            return sWindowSession;
+        }
+    }
 }
 
 //这个类就是控制view的生命周期
-class WindowManagerImpl {
+class ViewRootImpl {
+    
+    public void setView(View view, WindowManager.LayoutParams attrs, View panelParentView,int userId) {
+        ...
+        requestLayout();
+        ...
+        //mWindowSession是WindowManagerService.openSession()构建的Session
+        res = mWindowSession.addToDisplayAsUser(mWindow, mSeq, mWindowAttributes,
+                            getHostVisibility(), mDisplay.getDisplayId(), userId, mTmpFrame,
+                            mAttachInfo.mContentInsets, mAttachInfo.mStableInsets,
+                            mAttachInfo.mDisplayCutout, inputChannel,
+                            mTempInsets, mTempControls);
+    }
+    
+    @Override
+    public void requestLayout() {
+        if (!mHandlingLayoutInLayoutRequest) {
+            //检查是否主线程
+            checkThread();
+            mLayoutRequested = true;
+            //执行测量、布局、绘制
+            scheduleTraversals();
+        }
+    }
+    
     //测量
     private void performMeasure(int childWidthMeasureSpec, int childHeightMeasureSpec) {
         if (mView == null) {
@@ -186,14 +259,36 @@ class WindowManagerImpl {
         ...
         boolean canUseAsync = draw(fullRedrawNeeded);
     }
-    
+   
+}
+
+public class WindowManagerService extends IWindowManager.Stub {
     @Override
-    public void requestLayout() {
-        if (!mHandlingLayoutInLayoutRequest) {
-            checkThread();
-            mLayoutRequested = true;
-            scheduleTraversals();
-        }
+    public IWindowSession openSession(IWindowSessionCallback callback) {
+        return new Session(this, callback);
+    }
+    ...
+    public int addWindow(Session session, IWindow client, int seq,
+            LayoutParams attrs, int viewVisibility, int displayId, Rect outFrame,
+            Rect outContentInsets, Rect outStableInsets,
+            DisplayCutout.ParcelableWrapper outDisplayCutout, InputChannel outInputChannel,
+            InsetsState outInsetsState, InsetsSourceControl[] outActiveControls,
+            int requestUserId) {
+        
+    }
+}
+
+class Session extends IWindowSession.Stub implements IBinder.DeathRecipient {
+    @Override
+    public int addToDisplayAsUser(IWindow window, int seq, WindowManager.LayoutParams attrs,
+            int viewVisibility, int displayId, int userId, Rect outFrame,
+            Rect outContentInsets, Rect outStableInsets,
+            DisplayCutout.ParcelableWrapper outDisplayCutout, InputChannel outInputChannel,
+            InsetsState outInsetsState, InsetsSourceControl[] outActiveControls) {
+        //执行的就是WindowManagerService的addWindow()方法
+        return mService.addWindow(this, window, seq, attrs, viewVisibility, displayId, outFrame,
+                outContentInsets, outStableInsets, outDisplayCutout, outInputChannel,
+                outInsetsState, outActiveControls, userId);
     }
 }
 ```

@@ -1,5 +1,69 @@
 # view的触摸事件
 
+## 一、触摸事件从屏幕传到View/ViewGroup：
+
+![](触摸事件传递过程.png)
+
+## 二、ViewGroup分发给子View，都不消费的情况：
+
+![](触摸事件分发.jpg)
+
+
+
+## 三、子View消费
+
+![](触摸事件分发-消费.jpg)
+
+
+
+![](触摸事件分发-消费2.jpg)
+
+
+
+## 四、父控件消费
+
+![](触摸事件分发-父控件消费.jpg)
+
+
+
+![](触摸事件分发-父控件消费2.jpg)
+
+
+
+## 五、方法参数说明
+
+View里，有两个回调函数 ：
+
+public boolean dispatchTouchEvent(MotionEvent ev)；  
+
+public boolean onTouchEvent(MotionEvent ev);  
+
+ 
+
+ViewGroup里，有三个回调函数 ：
+
+public boolean dispatchTouchEvent(MotionEvent ev)；  
+
+public boolean onInterceptTouchEvent(MotionEvent ev);  
+
+public boolean onTouchEvent(MotionEvent ev); 
+
+ 
+
+在Activity里，有两个回调函数 ：
+
+public boolean dispatchTouchEvent(MotionEvent ev)；  
+
+public boolean onTouchEvent(MotionEvent ev);  
+
+
+
+单手指操作：ACTION_DOWN---ACTION_MOVE---ACTION_UP---ACTION_CANCEL
+
+多手指操作：ACTION_DOWN---ACTION_POINTER_DOWN---ACTION_MOVE--ACTION_POINTER_UP---ACTION_UP.
+
+
+
 View的onTouchEvent
 
 ```kotlin

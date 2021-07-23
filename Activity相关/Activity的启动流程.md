@@ -268,7 +268,165 @@ void startSpecificActivityLocked(ActivityRecord r,
 
 
 
+## 三、启动第二个Activity(Android 11)
 
+https://cloud.tencent.com/developer/article/1760292?from=article.detail.1761888
+
+https://cloud.tencent.com/developer/article/1761888
+
+https://cloud.tencent.com/developer/article/1761889
+
+1、ClientLifecycleManager.schedule()->
+
+2、IApplicationThread.scheduleTransaction()->ActivityThread.scheduleTransaction()->
+
+3、ActivityThread 的父类 ClientTransactionHandler.scheduleTransaction()->
+
+```java
+ void scheduleTransaction(ClientTransaction transaction) {
+        transaction.preExecute(this);
+     	//最终用ActivityThread的内部类H发送消息
+        sendMessage(ActivityThread.H.EXECUTE_TRANSACTION, transaction);
+    }
+```
+
+4、ActivityThread 的内部类 class H extends Handler
+
+```javascript
+public void handleMessage(Message msg) {
+            if (DEBUG_MESSAGES) Slog.v(TAG, ">>> handling: " + codeToString(msg.what));
+            switch (msg.what) {
+      
+                case EXECUTE_TRANSACTION:
+                    final ClientTransaction transaction = (ClientTransaction) msg.obj;
+                    mTransactionExecutor.execute(transaction);
+                   ... ... 
+                    break;
+```
+
+5、TransactionExecutor.execute()
+
+```java
+public void execute(ClientTransaction transaction) {
+    if (DEBUG_RESOLVER) Slog.d(TAG, tId(transaction) + "Start resolving transaction");
+
+    ...
+    //创建Activity
+    executeCallbacks(transaction);
+    //走Activity生命周期
+    executeLifecycleState(transaction);
+    ...
+}
+
+private void executeLifecycleState(ClientTransaction transaction) {
+    	//ActivityLifecycleItem继承自ClientTransctionItem，主要的子类有DestoryActivityItem、PauseActivityItem、StopActivityItem、ResumeActivityItem
+    	//可参考：https://blog.csdn.net/weixin_42695485/article/details/108741913
+        final ActivityLifecycleItem lifecycleItem = transaction.getLifecycleStateRequest();
+        ...
+        //走生命周期，参考：https://blog.csdn.net/u011386173/article/details/87857602
+        // Cycle to the state right before the final requested state.
+        cycleToPath(r, lifecycleItem.getTargetState(), true /* excludeLastState */, transaction);
+		//走生命周期
+        // Execute the final transition with proper parameters.
+        lifecycleItem.execute(mTransactionHandler, token, mPendingActions);
+        lifecycleItem.postExecute(mTransactionHandler, token, mPendingActions);
+    }
+```
+
+TransactionExecutor.executeCallbacks() //取Binder传过来的ClientTransaction的callbacks
+
+```java
+public void executeCallbacks(ClientTransaction transaction) {
+        final List<ClientTransactionItem> callbacks = transaction.getCallbacks();
+        ...
+        for (int i = 0; i < size; ++i) {
+            //item是LaunchActivityItem，在ActivityStackSupervisor.realStartActivityLocked()内添加LaunchActivityItem，另外还有lifecycleItem
+            //clientTransaction.addCallback(LaunchActivityItem.obtain(new Intent(r.intent),......
+            //clientTransaction.setLifecycleStateRequest(lifecycleItem);
+            final ClientTransactionItem item = callbacks.get(i);
+           ...
+            //mTransactionHandler是ActivityThread
+            item.execute(mTransactionHandler, token, mPendingActions);
+            item.postExecute(mTransactionHandler, token, mPendingActions);
+            .....
+        }
+    }
+```
+
+6、LaunchActivityItem.execute()
+
+```java
+@Override
+public void execute(ClientTransactionHandler client, IBinder token,
+        PendingTransactionActions pendingActions) {
+    Trace.traceBegin(TRACE_TAG_ACTIVITY_MANAGER, "activityStart");
+    ActivityClientRecord r = new ActivityClientRecord(token, mIntent, mIdent, mInfo,
+            mOverrideConfig, mCompatInfo, mReferrer, mVoiceInteractor, mState, mPersistentState,
+            mPendingResults, mPendingNewIntents, mIsForward,
+            mProfilerInfo, client, mAssistToken, mFixedRotationAdjustments);
+    client.handleLaunchActivity(r, pendingActions, null /* customIntent */);
+    Trace.traceEnd(TRACE_TAG_ACTIVITY_MANAGER);
+}
+```
+
+7、ActivityThread.handleLaunchActivity()
+
+```javascript
+ @Override
+    public Activity handleLaunchActivity(ActivityClientRecord r,
+            PendingTransactionActions pendingActions, Intent customIntent) {
+        ....
+        //初始化WindowManagerService
+        WindowManagerGlobal.initialize();
+        //构建Activity
+        final Activity a = performLaunchActivity(r, customIntent);
+		...
+		...
+        return a;
+    }
+```
+
+8、performLaunchActivity()
+
+```java
+private Activity performLaunchActivity(ActivityClientRecord r, Intent customIntent) {
+    ....
+        activity = mInstrumentation.newActivity(
+                    cl, component.getClassName(), r.intent);
+    ....
+            // Activity resources must be initialized with the same loaders as the
+            // application context.
+            appContext.getResources().addLoaders(
+                    app.getResources().getLoaders().toArray(new ResourcesLoader[0]));
+
+            appContext.setOuterContext(activity);
+            //创建PhoneWindow，执行attachBaseContext()
+            activity.attach(appContext, this, getInstrumentation(), r.token,
+                    r.ident, app, r.intent, r.activityInfo, title, r.parent,
+                    r.embeddedID, r.lastNonConfigurationInstances, config,
+                    r.referrer, r.voiceInteractor, window, r.configCallback,
+                    r.assistToken);
+
+            ...
+            int theme = r.activityInfo.getThemeResource();
+            if (theme != 0) {
+                //设置主题
+                activity.setTheme(theme);
+            }
+
+            activity.mCalled = false;
+            if (r.isPersistable()) {
+                //走两参数的onCreate方法
+                mInstrumentation.callActivityOnCreate(activity, r.state, r.persistentState);
+            } else {
+                //走一参数的onCreate方法
+                mInstrumentation.callActivityOnCreate(activity, r.state);
+            }
+            .....
+
+    return activity;
+}
+```
 
 ## 问题
 
