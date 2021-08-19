@@ -500,3 +500,4 @@ handler.post(runnable)的方式传递到主线程
 我们可以方便的使用java bean丢进去进行网络请求，最后能拿到带数据的java bean，
 功劳就是 addConverterFactory(GsonConverterFactory.create())
 这实现的数据的加工，底层也是通过gson来实现的
+

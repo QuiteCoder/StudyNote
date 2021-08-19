@@ -105,6 +105,20 @@ ISO七层协议:
 
 ## HTTPS连接流程图
 
+
+
+https连接过程：
+
+1、C：客户端发起连接，包含随机数C、TLS版本、加密套件、扩展列表；
+
+2、S：服务器回应：随机数S、TLS版本、加密套件、证书
+
+3、C：验证服务器证书，计算获得公钥，公钥加密随机数+未加密握手信息发给服务器；
+
+4、S：用私钥解密随机数校验，通过随机数加密握手信息发给服务器；
+
+5、C：用随机数解密握手信息，校验通过后连接建立完成；
+
 ![](https://raw.githubusercontent.com/QuiteCoder/MyMdImages/main/HTTPS%E5%BB%BA%E7%AB%8B%E8%BF%9E%E6%8E%A5%E6%B5%81%E7%A8%8B%E5%9B%BE.jpg)
 
 

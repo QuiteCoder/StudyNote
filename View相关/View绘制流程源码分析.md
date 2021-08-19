@@ -22,7 +22,7 @@
 
 4、Actiity调用onCreate方法，开始setContentView()
 
-5、初始DecorView，PhoneWindow.installDecor()
+5、执行PhoneWindow.installDecor()初始DecorView。注意：DecorView内部持有PhoneWindow
 
 6、Activity调用onResume方法，WindowManagerGlobal调用addView方法构建ViewRootImpl，并让其管理DecorView
 
