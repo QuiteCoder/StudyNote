@@ -259,7 +259,7 @@ public ViewModelProvider(@NonNull ViewModelStore store, @NonNull Factory factory
     mViewModelStore = store;
 }
 
-//步骤二：从mViewModelStore去ViewModel，如果直接返回，否则用mFactory创建，并存入mViewModelStore
+//步骤二：从mViewModelStore取ViewModel，如果有就直接返回，否则用mFactory创建，并存入mViewModelStore
 @NonNull
 @MainThread
 public <T extends ViewModel> T get(@NonNull Class<T> modelClass) {
@@ -296,6 +296,42 @@ public <T extends ViewModel> T get(@NonNull String key, @NonNull Class<T> modelC
 }
 
 ```
+
+
+
+### ViewModelStore的来源
+
+```java
+    class ComponentActivity {
+    	@NonNull
+        @Override
+        public ViewModelStore getViewModelStore() {
+            if (getApplication() == null) {
+                throw new IllegalStateException("Your activity is not yet attached to the "
+                        + "Application instance. You can't request ViewModel before onCreate call.");
+            }
+            ensureViewModelStore();
+            return mViewModelStore;
+        }
+
+        @SuppressWarnings("WeakerAccess") /* synthetic access */
+        void ensureViewModelStore() {
+            if (mViewModelStore == null) {
+                NonConfigurationInstances nc =
+                        (NonConfigurationInstances) getLastNonConfigurationInstance();
+                if (nc != null) {
+                    // Restore the ViewModelStore from NonConfigurationInstances
+                    mViewModelStore = nc.viewModelStore;
+                }
+                if (mViewModelStore == null) {
+                    mViewModelStore = new ViewModelStore();
+                }
+            }
+        }
+    }
+```
+
+
 
 **保存viewModelStore**
 界面销毁时：ComponentAcitivty.onRetainNonConfViewModeligurationInstance()

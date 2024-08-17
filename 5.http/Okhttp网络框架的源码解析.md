@@ -202,90 +202,92 @@ Response getResponseWithInterceptorChain() throws IOException {
 
 ```java
 public final class RetryAndFollowUpInterceptor implements Interceptor {
-    @Override public Response intercept(Chain chain) throws IOException {
-    Request request = chain.request();
-    RealInterceptorChain realChain = (RealInterceptorChain) chain;
-    Transmitter transmitter = realChain.transmitter();
+   
+    @Override
+    public Response intercept(Chain chain) throws IOException {
+        Request request = chain.request();
+        RealInterceptorChain realChain = (RealInterceptorChain) chain;
+        Transmitter transmitter = realChain.transmitter();
 
-    int followUpCount = 0;
-    Response priorResponse = null;
-    //因为考虑重定向，这里用死循环直到连接到最终的主机，要么
-    while (true) {
-      transmitter.prepareToConnect(request);
+        int followUpCount = 0;
+        Response priorResponse = null;
+        //因为考虑重定向，这里用死循环直到连接到最终的主机，要么
+        while (true) {
+          transmitter.prepareToConnect(request);
 
-      if (transmitter.isCanceled()) {
-        throw new IOException("Canceled");
-      }
+          if (transmitter.isCanceled()) {
+            throw new IOException("Canceled");
+          }
 
-      Response response;
-      boolean success = false;
-      try {
-        //把一个request推到下一个intercepter中
-        response = realChain.proceed(request, transmitter, null);
-        success = true;
-      } catch (RouteException e) {
-        //如果某条线路连接失败就报RouteException，Route是路由的意思
-        // The attempt to connect via a route failed. The request will not have been sent.
-        if (!recover(e.getLastConnectException(), transmitter, false, request)) {
-          throw e.getFirstConnectException();
-        }
-        continue;
-      } catch (IOException e) {
-        //连接超时会报IOException
-        // An attempt to communicate with a server failed. The request may have been sent.
-        boolean requestSendStarted = !(e instanceof ConnectionShutdownException);
-        
-        //能recover的话就执行continue重复一次请求，否则抛异常
-        if (!recover(e, transmitter, requestSendStarted, request)) throw e;
-        continue;
-      } finally {
-        // The network call threw an exception. Release any resources.
-        if (!success) {
-          transmitter.exchangeDoneDueToException();
-        }
-      }
+          Response response;
+          boolean success = false;
+          try {
+            //把一个request推到下一个intercepter中
+            response = realChain.proceed(request, transmitter, null);
+            success = true;
+          } catch (RouteException e) {
+            //如果某条线路连接失败就报RouteException，Route是路由的意思
+            // The attempt to connect via a route failed. The request will not have been sent.
+            if (!recover(e.getLastConnectException(), transmitter, false, request)) {
+              throw e.getFirstConnectException();
+            }
+            continue;
+          } catch (IOException e) {
+            //连接超时会报IOException
+            // An attempt to communicate with a server failed. The request may have been sent.
+            boolean requestSendStarted = !(e instanceof ConnectionShutdownException);
 
-      // Attach the prior response if it exists. Such responses never have a body.
-      if (priorResponse != null) {
-        response = response.newBuilder()
-            .priorResponse(priorResponse.newBuilder()
-                    .body(null)
-                    .build())
-            .build();
-      }
+            //能recover的话就执行continue重复一次请求，否则抛异常
+            if (!recover(e, transmitter, requestSendStarted, request)) throw e;
+            continue;
+          } finally {
+            // The network call threw an exception. Release any resources.
+            if (!success) {
+              transmitter.exchangeDoneDueToException();
+            }
+          }
 
-        
-      //下面就是处理重定向的工作了
-      Exchange exchange = Internal.instance.exchange(response);
-      Route route = exchange != null ? exchange.connection().route() : null;
-      Request followUp = followUpRequest(response, route);
+          // Attach the prior response if it exists. Such responses never have a body.
+          if (priorResponse != null) {
+            response = response.newBuilder()
+                .priorResponse(priorResponse.newBuilder()
+                        .body(null)
+                        .build())
+                .build();
+          }
 
-      if (followUp == null) {
-        if (exchange != null && exchange.isDuplex()) {
-          transmitter.timeoutEarlyExit();
-        }
-        return response;
-      }
 
-      RequestBody followUpBody = followUp.body();
-      if (followUpBody != null && followUpBody.isOneShot()) {
-        return response;
-      }
+          //下面就是处理重定向的工作了
+          Exchange exchange = Internal.instance.exchange(response);
+          Route route = exchange != null ? exchange.connection().route() : null;
+          Request followUp = followUpRequest(response, route);
 
-      closeQuietly(response.body());
-      if (transmitter.hasExchange()) {
-        exchange.detachWithViolence();
-      }
+          if (followUp == null) {
+            if (exchange != null && exchange.isDuplex()) {
+              transmitter.timeoutEarlyExit();
+            }
+            return response;
+          }
 
-       //超过重定向的最大值就抛异常
-      if (++followUpCount > MAX_FOLLOW_UPS) {
-        throw new ProtocolException("Too many follow-up requests: " + followUpCount);
-      }
+          RequestBody followUpBody = followUp.body();
+          if (followUpBody != null && followUpBody.isOneShot()) {
+            return response;
+          }
 
-      request = followUp;
-      priorResponse = response;
-    }
-  }
+          closeQuietly(response.body());
+          if (transmitter.hasExchange()) {
+            exchange.detachWithViolence();
+          }
+
+           //超过重定向的最大值就抛异常
+          if (++followUpCount > MAX_FOLLOW_UPS) {
+            throw new ProtocolException("Too many follow-up requests: " + followUpCount);
+          }
+
+          request = followUp;
+          priorResponse = response;
+    	}
+  	}
 }
 ```
 
@@ -380,7 +382,7 @@ public final class BridgeInterceptor implements Interceptor {
 
 ### 3、CacheInterceptor
 
-主要工作是保存Response和返回可用没过期的Respouse
+主要工作是保存Response和返回可用没过期的Response
 
 
 

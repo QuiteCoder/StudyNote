@@ -311,7 +311,21 @@ Android9.0起（含9.0）对象会被`Cleaner`持有并存入`ReferenceQueue`：
 
 ![](Android 9.0.png)
 
+
+
+
+
 ##### 关于 oneway
+
+```java
+package com.test.aidl;
+import com.test.aidl.Book;
+
+interface IBookListener {
+    // 用法是在定义方法前加多oneway的关键字
+    oneway void handlerBook(out Book book);
+}
+```
 
 主要有两个特征：
 

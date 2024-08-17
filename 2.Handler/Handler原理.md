@@ -19,7 +19,7 @@
 程序起来时在 `ActivityThread.main()` 方法以经初始化过，所以直接使用就行
 
 `Looper.prepare()` 创建 `Looper` 并添加到 `ThreadLocal` 中
-`Looper.loop()` 开始死循环从 `MessageQueue` 获取消息，每一个`Looper`中有一个`MessageQueue`
+`Looper.loop()` 开始死循环从 `MessageQueue` 获取消息，每一个`Looper`中有一个`MessageQueue`，一个应用中仅且仅有一个`sMainLooper`
 
 
 
@@ -54,6 +54,12 @@ public final class Looper {
     public static void prepare() {
         //这是子线程用法，传true，可以让MessageQueue退出
         prepare(true);
+    }
+    
+    private Looper(boolean quitAllowed) {
+        // quitAllowed是用来标记MessageQueue允许退出循环
+        mQueue = new MessageQueue(quitAllowed);
+        mThread = Thread.currentThread();
     }
     
     //创建新的Looper,给ThreadLocal保存
@@ -527,6 +533,8 @@ public boolean onTouchEvent(MotionEvent event) {
 `ANR` 的原因是有任务在进行耗时操作，让本该执行的任务无法在合适的时间内执行
 在于任务本身，而非死循环
 
+补充：应用能够运行起来也是因为这个for循环在Run，当出现耗时的message时，才会出现ANR！
+
 
 
 ## 14、同步屏障和异步消息是怎么实现的
@@ -598,4 +606,10 @@ public boolean onTouchEvent(MotionEvent event) {
 * 【参考二：】https://github.com/android-notes/Cockroach/blob/master/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90.md
 
 * 【相关库：】https://github.com/android-notes/Cockroach
+
+
+
+
+
+
 
