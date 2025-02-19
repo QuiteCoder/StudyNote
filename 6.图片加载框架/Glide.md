@@ -359,7 +359,7 @@ EngineResource.ResourceListener {
             return null;
         }
 
-        // 8.首先是acitve缓存，使用HashMap保存弱引用数据，不适用强引用是为了防止内存泄漏
+        // 8.首先是acitve缓存，使用HashMap保存弱引用数据，不是用强引用是为了防止内存泄漏
         EngineResource<?> active = loadFromActiveResources(key);
         if (active != null) {
             if (VERBOSE_IS_LOGGABLE) {
@@ -384,15 +384,132 @@ EngineResource.ResourceListener {
 
 
 
+## 三、三级缓存是哪三级？
+
+第一级：正在使用中的资源，使用Map保存，Map<Key, WeakReference<EngineResource<?>>> activeResources
+
+第二级：LruCache，当View销毁时，缓存从第一级传到第二级
+
+第三级：磁盘+网络，当第一、二级缓存没有找到，就走磁盘或者网络
+
+
+
+在 Glide 中，`loadFromActiveResources` 是 **内存缓存** 的一部分，它负责从 **活动资源缓存（Active Resources Cache）** 中加载图片资源。活动资源缓存是 Glide 内存缓存的第一层，用于存储当前正在使用的图片资源。
+
+------
+
+### 1. **活动资源缓存的作用**
+
+活动资源缓存的主要作用是：
+
+- 存储当前正在使用的图片资源。
+- 使用 **弱引用（WeakReference）** 来持有这些资源，确保当资源不再被使用时，可以被垃圾回收器回收，从而避免内存泄漏。
+- 作为内存缓存的第一层，优先于 **LRU 内存缓存（Memory Cache）** 被检查。
+
+------
+
+### 2. **活动资源缓存的结构**
+
+活动资源缓存的核心是一个 `Map`，其键是图片资源的缓存键（`Key`），值是对资源的弱引用（`WeakReference<EngineResource<?>>`）。
+
+```java
+final Map<Key, WeakReference<EngineResource<?>>> activeResources;
+```
+
+- **Key**：缓存键，由图片的 URL、尺寸、转换选项等生成，用于唯一标识一个资源。
+- **WeakReference<EngineResource<?>>**：对资源的弱引用，确保资源不再被使用时可以被回收。
+
+------
+
+### 3. **loadFromActiveResources 的实现**
+
+`loadFromActiveResources` 方法的实现如下：
+
+```java
+private EngineResource<?> loadFromActiveResources(Key key, boolean isMemoryCacheable) {
+    if (!isMemoryCacheable) {
+        return null;
+    }
+    WeakReference<EngineResource<?>> activeRef = activeResources.get(key);
+    if (activeRef != null) {
+        EngineResource<?> active = activeRef.get();
+        if (active != null) {
+            return active;
+        } else {
+            activeResources.remove(key);
+        }
+    }
+    return null;
+}
+```
+
+#### 3.1 **方法逻辑**
+
+1. 检查是否启用了内存缓存（`isMemoryCacheable`），如果未启用，则直接返回 `null`。
+2. 根据缓存键（`Key`）从 `activeResources` 中获取对应的弱引用（`WeakReference`）。
+3. 如果弱引用存在，尝试获取其持有的资源（`EngineResource`）。
+   - 如果资源存在，则返回该资源。
+   - 如果资源已被回收（弱引用为 `null`），则从 `activeResources` 中移除该键。
+4. 如果没有找到资源，则返回 `null`。
+
+------
+
+### 4. **活动资源缓存的生命周期**
+
+活动资源缓存中的资源生命周期如下：
+
+1. **资源被加载**：
+   - 当图片资源被加载并显示时，Glide 会将其放入活动资源缓存中。
+   - 此时，资源被 `Target`（例如 `ImageViewTarget`）持有，同时活动资源缓存也持有其弱引用。
+2. **资源被释放**：
+   - 当资源不再被 `Target` 持有时（例如 `ImageView` 被销毁或加载了新的图片），Glide 会将其从活动资源缓存中移除。
+   - 如果资源仍然有效（未被垃圾回收），则将其放入 LRU 内存缓存中，供后续使用。
+3. **资源被回收**：
+   - 如果资源没有被任何 `Target` 持有，且活动资源缓存中的弱引用被垃圾回收器回收，则资源会被彻底释放。
+
+------
+
+### 5. **活动资源缓存与 LRU 内存缓存的关系**
+
+Glide 的内存缓存分为两层：
+
+1. **活动资源缓存（Active Resources Cache）**：
+   - 存储当前正在使用的资源。
+   - 使用弱引用，避免内存泄漏。
+   - 优先级高于 LRU 内存缓存。
+2. **LRU 内存缓存（Memory Cache）**：
+   - 存储最近使用过的资源。
+   - 使用 LRU（最近最少使用）算法管理缓存。
+   - 当活动资源缓存中的资源被释放时，会被移动到 LRU 内存缓存中。
+
+------
+
+### 6. **总结**
+
+`loadFromActiveResources` 加载的是 **当前正在使用的图片资源**，这些资源存储在活动资源缓存中。活动资源缓存是 Glide 内存缓存的第一层，使用弱引用确保资源在不被使用时可以被回收。它的主要作用是：
+
+- 提高内存缓存的命中率。
+- 避免重复加载正在使用的资源。
+- 与 LRU 内存缓存配合，实现高效的内存管理。
+
+通过活动资源缓存，Glide 能够在保证性能的同时，最大限度地减少内存占用。
+
 
 
 ## 三、扩展（LRU缓存）
 
 Lru缓存机制，核心是用到LinkedHasdMap，在LruResourceCache的父类中使用的就是它
 
+LRU 算法的核心思想是：
+
+- 当缓存空间不足时，优先移除最近最少使用的数据。
+- 通过维护一个双向链表LinkedHashMap，记录数据的访问顺序：
+  - 每次访问数据时，将其移动到链表的头部。
+  - 当需要移除数据时，从链表的尾部移除。
+
 ```java
 public class LruCache<T, Y> {
-    // 构造函数的第三个参数accessOrder为true，就是可以让访问到的元素调整存放到双向链表尾部，新的元素也是从尾部插入，淘汰掉链表头部的元素
+    // 构造函数的第三个参数accessOrder为true，就是可以让访问到的元素调整存放到双向链表头部，当需要移除元素，就从尾部移除
     private final Map<T, Entry<Y>> cache = new LinkedHashMap<>(100, 0.75f, true);
 }
 ```

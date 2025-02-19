@@ -39,7 +39,7 @@ private void handleBindApplication(AppBindData data) {
        		Application app;
     
     		......
-             //
+             //构建Application
             app = data.info.makeApplication(data.restrictedBackupMode, null);
 
 			//赋值全局变量

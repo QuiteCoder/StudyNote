@@ -346,4 +346,4 @@ oneway 情况：
 
 问：怎么理解客户端线程挂起等待呢？有没有实际占用 CPU 的调度？
 
-答：等待 binder 驱动返回数据相对于线程的 sleep 操作，底层调用的是 waiteventinterruptible() linux 系统函数，所以不回占用 CPU
+答：等待 binder 驱动返回数据相对于线程的 sleep 操作，底层调用的是 waiteventinterruptible() linux 系统函数，所以不会占用 CPU

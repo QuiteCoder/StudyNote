@@ -157,9 +157,15 @@ public final class Message implements Parcelable {
 }
 ```
 
+当调用Handler的sendMessage()时，会调用MessageQueue的enqueueMessage()，这时候会对message进行缓存处理
+
+注意：sPool对象位于Message.java内，属于静态的Message类型，作为缓存的链表头的指针对象
+
 
 
 缓存时：
+
+注意：下面图中msg1，msg2是已经被执行的消息，已经存在缓存链表中，而msg3是正在缓存的过程，执行recycleUnchecked()触发。
 
 ①next = sPool;//next指向上一个`Message`
 ②sPool = this;//`this`表示的是当前的`Message`作为消息对象池中下一个被复用的对象；
@@ -168,12 +174,53 @@ public final class Message implements Parcelable {
 
 取缓存时：
 
+注意：下面图中msg1，msg2，msg3是已经被执行的消息，已经存在缓存链表中，而msg3是正在从缓存链表中取出的过程，执行obtain()触发。
+
 ① 判断头指针`sPool`是否不为空，显然这里的`sPool`已经不为空了；`Message m = sPool，`从对象池中取出一个`Message`对象赋给`m`；`sPool = m.next`，将消息对象池的下一个可复用的对象（`msg2`）赋给`sPool`（如果一开始的sPool指向msg1，那么此时sPool == null）；通俗讲就是从池中拿一个对象出来复用嘛，把它从链中断开，那么头指针要一直指着下一个可复用的对象；
 ②`m.next = null`，断开俩个消息之间的链接，通俗讲就是把连接2个消息的"next"剪断，让他们不再有瓜葛；
 
 ![](Message缓存机制-取缓存.png)
 
 
+
+## 5、Message加入MessageQueue队列
+
+Message对象通过MessageQueue的enqueueMessage()方法将新加入的Message进行存储，让新加入Message的next指针连接到上一个加入的Message本体对象，形成线性的链表结构。
+
+```java
+boolean enqueueMessage(Message msg, long when) {
+        ...
+        synchronized (this) {
+            // 如果消息队列被退出了，那就回收新加入的消息对象
+            if (mQuitting) {
+                IllegalStateException e = new IllegalStateException(
+                        msg.target + " sending message to a Handler on a dead thread");
+                Log.w(TAG, e.getMessage(), e);
+                msg.recycle();
+                return false;
+            }
+            // 标记正在使用中
+            msg.markInUse();
+            // when = 0代表没有指定执行时间，即需要正常加入消息队列，否则需要比对队列中其他的消息when参数进行排列
+            msg.when = when;
+            // mMessages：上一个加入的消息对象
+            Message p = mMessages;
+            boolean needWake;
+            if (p == null || when == 0 || when < p.when) {
+                // New head, wake up the event queue if blocked.
+                // 新加入的消息next指针指向上一个加入的消息对象
+                msg.next = p;
+                // 更新队列中的mMessages
+                mMessages = msg;
+                needWake = mBlocked;
+            } else {
+                ...
+            }
+			...
+        }
+        return true;
+    }
+```
 
 
 
