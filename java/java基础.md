@@ -189,31 +189,261 @@ Thread.Sleep(0)的作用，就是“触发操作系统立刻重新进行一次CP
 
 ### synchronized关键字
 
-声明一个域或者一个方法可以保证同步。
+声明一个域或者一个方法可以保证同步，解决的是**原子性问题**，也可以解决**可见性问题**，但是使用时严格要求线程的创建时机。
+
+原子性问题：线程T1~Tn 并发修改数据，保证最终修改的结果正确。
+
+可见性问题：线程T1修改数据，保证线程T2读取到正确的数据。
+
+#### 解决可见性问题错误示范：
+
+```java
+static int i = 1;
+public static void main(String[] args) throws InterruptedException {
+
+    Thread t1 = new Thread(new Runnable() {
+        @Override
+        public void run() {
+            System.out.println("t1 start");
+            while (i != 2) {
+                // 1、 doSomething... 当i = 2时退出循环
+            }
+            System.out.println("t1 end");
+        }
+    }).setName("t1");
+
+    Thread t2 = new Thread(new Runnable() {
+        @Override
+        public void run() {
+            System.out.println("t2 start");
+            // 2. 修改 i 的值, i = 2,并同步到主内存中
+            // 由于线程t1创建时拿到的i = 1存在工作内存，不知道主内存中的i发生变化
+            // 解决方案：volatile关键字修饰i
+            changeI();
+            System.out.println("t2 end");
+        }
+    }).setName("t2");
+
+    t1.start();
+    Thread.sleep(1000);
+    t2.start();
+}
+
+public synchronized static void changeI() {
+    i = 2;
+}
+```
+
+```java
+输出结果：
+t1 start
+t2 start
+t2 end // t1 end 没有打印，处于while循环中
+
+```
 
 
 
-### Volatile关键字
+#### 解决**原子性**问题正确示范：
+
+```java
+static int i = 1;
+public static void main(String[] args) throws InterruptedException {
+
+    Thread t1 = new Thread(new Runnable() {
+        @Override
+        public void run() {
+            for (int j = 0; j < 1000; j++) {
+                changeI();
+                try {
+                    Thread.sleep(10); // 减慢执行速度，为了模拟两个线程并发修改数据
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
+                }
+            }
+            System.out.println("t1 , i = " + i);
+        }
+    });
+    t1.setName("t1");
+
+    Thread t2 = new Thread(new Runnable() {
+        @Override
+        public void run() {
+            for (int j = 0; j < 1000; j++) {
+               changeI();
+                try {
+                    Thread.sleep(10);// 减慢执行速度，为了模拟两个线程并发修改数据
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
+                }
+            }
+            System.out.println("t2 , i = " + i);
+        }
+    });
+    t2.setName("t2");
+
+    t1.start();
+    t2.start();
+}
+
+public synchronized static void changeI() {
+    i = i + 1;
+}
+```
+
+```java
+输出结果：
+t1 , i = 2001
+t2 , i = 2001
+```
+
+
+
+### volatile关键字
 
 可声明 对象、变量，让编译器知道这参与多线程修改的
 
-**volatile** 关键字为实例域的同步访问提供了一种免锁机制。如果声明一个域为 **volatile** **,**那么编译器和虚拟机就知道该域是可能被另一个线程并发更新的。
+**volatile** 关键字为实例域的同步访问提供了一种免锁机制。
+
+#### **可见性：**
+
+```java
+// 这个demo验证可见性问题
+
+public static int i = 1;
+public static void main(String[] args) throws InterruptedException {
+
+    // 1、 t1 先启动，从堆中读取到i = 1，放到线程栈的工作内存中，此时，i! = 2成立，while循环没有退出
+    Thread t1 = new Thread(new Runnable() {
+        @Override
+        public void run() {
+            System.out.println("t1 start");
+            while (i != 2) {}
+            System.out.println("t1 end");            }
+    }).setName("t1");
+
+    // 2、 t2 1秒后启动，并修改i = 2，当t2线程栈退出后，主存（堆）中的i已经更新了，但是t1中读取的i依然是工作内存中的i，i还是 = 1，控制台不会打印"t1 end"
+    Thread t2 = new Thread(new Runnable() {
+        @Override
+        public void run() {
+            i = 2;
+            System.out.println("t2 end");
+        }
+    }).setName("t2");
+
+    t1.start();
+    Thread.sleep(1000);
+    t2.start();
+}
+```
+
+```java
+输出结果：
+t1 start
+t2 end
+```
+
+给 i 添加**volatile**修饰，当t2执行完 i = 2的指令，t1再次获取 i 的值就会从主存中获取，而非工作内存，那么 i 就是对全部线程可见。
+
+```java
+public volatile static int i = 1;
+```
+
+```java
+输出结果：
+t1 start
+t2 end
+t1 end // t1线程从主存中读到了 i = 2，退出while循环
+```
 
 
 
-### 原子性
+#### **有序性：**
+
+参考：https://blog.csdn.net/weixin_37841366/article/details/113086438
+
+jvm会对字节码解释成指令，指令的数量和顺序未必按照java代码书写的顺序排序，但是能够保证不影响运算结果，这是为了减少执行指令的数量和降低寄存器的压力，从而提高运行速度。
+
+加了final和volatile的代码，会阻止指令的重排序，保证读写数据的正确性。
+
+案例一：
+
+```java
+int a = 100;
+int b = 50;
+a = a + 10;
+b = b + 20;
+```
+
+```java
+// javap -v xxx.class 生成的字节码结果 
+public static void main(java.lang.String[]);
+    descriptor: ([Ljava/lang/String;)V
+    flags: ACC_PUBLIC, ACC_STATIC
+    Code:
+      // stack是操作数栈，=2代表的是a，b共有两个操作数
+      stack=2, locals=3, args_size=1
+         0: bipush        100 // 100 入栈
+         2: istore_1          // 储存 a 的值 = 100， _1代表a
+         3: bipush        50  // 50 入栈
+         5: istore_2		 // 储存 b 的值 = 50， _1代表b
+         6: iload_1			 // 加载a，a入栈
+         7: bipush        10  // 10入栈
+         9: iadd			 // 求和：a + 10
+        10: istore_1		 // 储存 a 的值
+        11: iload_2			 // 加载b，b入栈
+        12: bipush        20  // 20 入栈
+        14: iadd			 // 求和：b + 20
+        15: istore_2		 // 储存 b 的值
+        16: return			 // 出栈
+```
+
+通过解释器优化字节码之后，有可能出现以下情况（具体的操作指令不是这样子的）：
+
+```java
+         0: bipush        100 // 100 入栈
+         1: bipush        10  // 10入栈
+         2: iadd			 // 求和：100 + 10
+         3: istore_1          // 储存 a 的值 = 110， _1代表a
+             
+         4: bipush        50  // 50 入栈
+         5: bipush        20  // 20 入栈
+         6: iadd			 // 求和：50 + 20
+         7: istore_2		 // 储存 b 的值 = 70， _1代表b
+        8: return			 // 出栈
+```
+
+
+
+案例二：
+
+![](E:\StudyNote\java\操作指令重排序（前）.png)
+
+![](E:\StudyNote\java\操作指令重排序（后）.png)
+
+- 重排序后， a 的两次操作被放到一起，指令执行情况变为 Load a、Set to 100、Set to 110、 Store a。
+- 下面和 b 相关的指令不变，仍对应 Load b、 Set to 5、Store b。
+- 可以看出，重排序后 a 的相关指令发生了变化，节省了一次 Load a 和一次 Store a。
+- 重排序通过减少执行指令，从而提高整体的运行速度，这就是重排序带来的优化和好处。
+
+
+
+
+
+### 原子性操作的java类
 
 java.util.concurrent.atomic 包中有很多类使用了很高效的机器级指令（而不是使用锁） 来保证其他操作的原子性
 
+AtomicInteger 、AtomicLong、 AtomicBoolean
 
+**公平锁/非公平锁 ReentrantLock**
 
 ### 读/写锁  ReentrantReadWriteLock
-
-如果很多线程从一个数据结构读取数据而很少线程修改其中数据的话， 后者是十分有用的。在这种情况下， 允许对读者线程共享访问是合适的。当然，写
-
-者线程依然必须是互斥访问的。
 
 •Lock readLock( )
 得到一个可以被多个读操作共用的读锁， 但会排斥所有写操作。 
 •Lock writeLock( )
 得到一个写锁， 排斥所有其他的读操作和写操作。
+
+
+

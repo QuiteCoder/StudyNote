@@ -1,0 +1,157 @@
+知识点：
+
+1、java线程模型、java内存模型
+
+6、java线程池
+
+8、JVM、java并发 精解
+
+
+
+
+
+
+2、FrameWork细节：
+    【Handler】  完成
+
+    【AMS】  
+
+    【WMS】  
+
+    【view绘制流程】 
+    ActivityThread.handleResumeActivity -> WindowManagerImpl.addView(decorView, layoutParams)
+    -> 新建 ViewRootImpl ，setView 把 DecorView 下发(DecorView 是界面的根view) -> ViewRootImpl.requestLayout
+    -> scheduleTraversals -> doTraversal -> performTraversals -> performMeasure、performLayout、performDraw
+
+    开始执行测量、定位、绘图操作
+
+    onMeasure: 先测量子view，再调用 setMeasuredDimension 把测量结果保存，用于确定 onLayout 的时候，子view应该怎么摆放
+               通过递归调用，measureChildWithMargins ，最先完成测量的是 viewTree 的子节点，子节点测量完成后，才会测量父节点，是一个自下而上的测量顺序
+    onLayout：测量完成后，对子view的定位
+    onDraw：绘图相关逻辑
+
+    【自定义view、自定义viewGroup】
+    自定义ViewGroup：
+    1、事件的分发：dispatchTouchEvent()、onTouchEvent()、onInterceptTouchEvent()
+    2、UI的绘制：onMeasure()、onLayout()、onDraw()、dispathDraw()、drawChild(）
+                
+    自定义View：
+    1、事件的分发：dispatchTouchEvent()、onTouchEvent()
+    2、UI的绘制：onMeasure()、onDraw()，无需重写 onLayout()，因为 view 内部没有子view，无需进行子view的定位
+
+    【view绘制流程的时机】
+    在 Activity 的 onResume 时触发绘制，ActivityThread.handleResumeActivity
+
+    【为什么子线程不能更新UI】
+    View 需要在 onResume 之后才会绘制，绘制过程中会有 checkThread 方法检查是否在UI线程变更视图
+    如果在 onResume 之前用子线程更新UI，不会报错，因为绘制流程还没开始
+
+
+3、性能优化方向细节
+已完成
+
+4、MVP、MVVM 结构对比、精解
+MVP：
+好处：Model层和View层，通过 Presenter 层进行数据交互，好处是将 Model 层 View 层隔离，降低耦合性
+不足：需要增加很多接口定义，维护成本增加
+
+MVVM：也可以做到 Model 层和 View 层隔离
+好处：是数据驱动形式的代码架构，通过结合 LiveData 组件，实现数据的自动感知，相比 MVP 模式，无需增加接口定义监听数据回调
+     可以再添加 DataBinding 组件，使得 MVVM 模式下数据实现双向绑定，只要数据有变化，View 层就能自动同步最新的结果
+不足：使用 DataBinding、ViewModel 组件会重新生成新文件，会影响编译速度
+
+5、LifeCycle、LiveData、ViewModel 精解
+LifeCycle: 单纯的生命周期监控组件，可以监控 Activity、Fragment、Service、Process（监控整个app进程）
+    原理：由一个空白Fragment（ReportFragment）内部进行生命周期的感知，真正执行状态下发的是 LifecycleRegistry 对象，最后会触发 LifeCycleObserver 定义的方法回调
+LiveData：具有生命周期感知的数据存储组件，生命周期感知能力依赖 LifeCycle。
+          活跃状态（onStart、onResume、onPause）才会接收数据回调，非活跃状态（onCreate、onStop、onDestroy）不会触发数据回调
+          支持数据转换 Transformations.map、Transformations.switchMap
+          派生类有 MutableLiveData、MediatorLiveData（同时观察多个数据源，在相同回调出口接收数据）
+    原理：从 LifecycleEventObserver 中感知生命周期的变化，只有活跃状态下的再触发 activeStateChanged -> dispatchingValue ，再触发订阅对象的 onChange 方法进行数据下发
+         setValue、postValue 区别
+         setValue 主线程下设置数据
+         postValue 子线程下设置数据，内部通过线程池 postToMainThread 方式，执行 Runnable 任务，在任务内调用 setValue 设置数据，这个时候已经是主线程，所以可以直接调用 setValue
+ViewModel：以注重生命周期的方式存储和管理界面数据（作用）
+           在界面重构后，如旋转屏幕触发界面重构，在 ViewModel 里面的数据会继续保留（特点）
+        细节：多个Fragment可以使用同一个 ViewModel 对象，owen 为当前 Activity，实现数据的共享。
+             ViewModel 内不持有任何 UI 层面的引用，所以无论界面怎么销毁、创建，都不会影响其内部数据
+             ViewModel 也具有生命周期感知能力，只要 owen 被销毁，也会同步销毁内部数据，无需额外维护
+        原理：如何获取 ViewModel 对象？
+             ViewModelProvider 通过内部的 Map 集合，根据 key（DEFAULT_KEY + ":" + canonicalName, modelClass）获取实例，如果没有对应实例，则创建该实例
+             为什么界面重建后不会影响 ViewModel 内部数据？
+             ActivityThread 中的 ActivityClientRecord 是不受 activity 重建的影响，那么ActivityClientRecord中lastNonConfigurationInstances也不受影响，那么其中的Object activity也不受影响，那么ComponentActivity中的NonConfigurationInstances的viewModelStore不受影响，那么viewModel也就不受影响了。
+
+7、kotlin协程内部原理
+已完成
+
+9、为什么 Loop 死循环不会卡死系统
+死循环自身的逻辑不会导致ANR，ANR的原因是信息没有在指定时间内分发下去，如前台操作超过5秒，或前台服务超过20秒，前台广播超过10秒等
+Loop死循环的作用仅仅是从消息队列中获取消息，然后进行消息分发，只要在规定时间内完成分发流程，死循环的逻辑就能正常运行，不会造成ANR
+
+10、GRPC的底层逻辑是什么？
+GRPC是基于http2协议实现的，是面向连接的协议，也就是TCP，需要经过握手来简历通信，GRPC是可靠的链接通信。
+http2相比http/1.1最大的优势是多路复用，即建立一个TCP链接，可以同时处理多个资源。
+
+11、为什么GRPC的连接器可以做到同时发送、接收数据？
+用到了http2多路复用的特性，只需要建立一次TCP链接，就可以同时发送、接收数据，互不影响。
+
+12、GRPC这么好，为什么现在的接口还用json返回数据？
+现在绝大多是的api接口都是基于http/1.1协议开发，为了最大限度兼容各种平台，所以更推荐使用json方式返回数据。
+
+13、准确获取Activity首帧加载成功的回调位置
+使用根布局的 getViewTreeObserver -> addOnDrawListener 监听首帧绘制成功的回调
+        View rootView = getWindow().getDecorView();
+        rootView.getViewTreeObserver().addOnDrawListener(new ViewTreeObserver.OnDrawListener() {
+            @Override
+            public void onDraw() {
+                Log.d(TAG, "rootView onDraw");
+            }
+        });
+
+从日志上看，onResume 回调比首帧回调更早执行
+2025-02-25 13:43:31.509  9917-9917  LLLLLL                  com.kejiyuanren.pop                  D  activity onResume
+2025-02-25 13:45:34.147 10405-10405 LLLLLL                  com.kejiyuanren.pop                  D  rootView onDraw
+
+14、为什么可以用 Handler 进行跨线程通信？
+子线程中 mainHandler 的 sendMessage 实际上是向 主线程的 MessageQueue 添加消息，主线程的 Looper 在遍历消息队列的时候，就会处理子线程发出来的消息，并在主线程的环境下相应分发结果
+
+15、Handler 的 post 和 sendMessage 有什么区别
+post 实际上也是调用 sendMessageDelay 方法进行传输，但 Runnable 对象会被封装在 Message 对象的 callBack 字段内，消息分发的时候会判断是否有 callBack 对象
+如果有，就会触发 Runnable 中的 run 方法回调；如果没有，就继续同步处理 Message 消息
+post 是异步回调，sendMessage 是同步处理消息队列里面的消息
+
+16、Kotlin Dispatcher.Default 和 Dispatcher.IO 区别
+特性	   Dispatcher.Default	       Dispatcher.IO
+线程池类型	固定大小的线程池	           动态扩展的线程池
+线程数量	与 CPU 核心数相关（通常较小）	动态扩展（默认最大 64 个线程）
+共享机制	与 Dispatcher.IO 共享底层线程池框架	基于 Dispatcher.Default 扩展
+适用场景	CPU 密集型任务	              I/O 密集型任务或阻塞操作
+
+Dispatcher.Default 
+核心线程数与CPU核心数量有关，通常是 Runtime.getRuntime().availableProcessors() 的最小值，至少为 2。4核CPU核心线程数是4
+线程池大小固定，不会动态扩展
+
+Dispatcher.IO
+核心线程数动态扩展，默认最大为 64 个线程（或根据系统配置调整）。
+线程池大小可以动态调整
+
+IO 类型其实是从 Default类型 共享底层线程框架，所以两者的线程名称前缀相同，都叫 DefaultDispatcher-worker-
+
+17、如果 IO 类型的线程数量超过64，会怎样？
+如果 I/O 任务数量超过 64，并且所有线程都在忙碌，新的任务会被放入队列中等待。
+
+线程池会按照以下规则处理任务：
+    如果队列未满：任务会被放入队列中，等待线程空闲时执行。
+    如果队列已满：根据线程池的拒绝策略（Rejection Policy），可能会抛出异常或丢弃任务。
+        在 Kotlin 协程中，默认的线程池配置通常不会拒绝任务，而是通过扩展队列来容纳更多任务。
+
+18、Dispatcher.Unconfined 详细说明
+不限制协程的执行线程，协程会在调用它的线程中启动，并在挂起点后可能切换到其他线程
+
+在当前运行线程启动协程，但恢复后不一定会回到原来的线程，有可能在其他线程进行恢复。
+
+特性	    Dispatchers.Unconfined	
+线程绑定	无绑定，可能在不同线程中执行	
+适用场景	测试、调试、简单任务
+线程切换	在挂起点后可能切换到其他线程	
+性能	   轻量级，但可能增加线程切换开销	

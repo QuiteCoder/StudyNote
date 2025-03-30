@@ -1,10 +1,4 @@
 # AIDL
-相关文章：
-
-[关于Binder](Binder.md)
-
-
-
 > 注：
 > 一、如果不需要跨进程，则应继承`Binder`并返回给绑定服务调用处；参考：https://developer.android.com/guide/components/bound-services#Binder
 > 二、如果需要跨进程但不需要处理多线程，则建议使用`Messenger`来实现接口；参考：https://developer.android.com/guide/components/bound-services#Messenger

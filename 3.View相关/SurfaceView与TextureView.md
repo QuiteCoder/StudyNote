@@ -6,7 +6,7 @@
 
 ### 1.1 **核心特性**
 
-- **独立的 Surface**：`SurfaceView` 拥有一个独立的 Surface，与主窗口的 Surface 分离。
+- **独立的 Surface**：`SurfaceView` 拥有一个独立的 Surface，与DecorView窗口的 Surface 分离。
 - **双缓冲机制**：支持双缓冲，减少画面撕裂。
 - **适合高性能渲染**：常用于游戏、视频播放等场景。
 
@@ -212,6 +212,99 @@ if (canvas != null) {
   - 需要支持动画和变换（例如动态 UI）。
   - 需要与 View 系统交互。
 
+
+
+
+
+## 6、Canvas
+
+在 Android 的 `View` 系统中，`onDraw(Canvas canvas)` 方法中的 `Canvas` 对象是由系统框架层创建并传递的，其来源与 Android 的渲染机制密切相关。具体来说：
+
 ------
 
-通过理解 `SurfaceView` 和 `TextureView` 的源码和特性，开发者可以根据具体需求选择合适的组件，以实现高效的图形或视频渲染。
+### **Canvas 的来源**
+
+1. **软件绘制（Software Rendering）**
+   在未启用硬件加速的传统模式下：
+
+   - **Canvas 与 Surface**：每个窗口（如 `Activity` 的根视图）对应一个 `Surface`，`Surface` 是底层图形缓冲区（`BufferQueue`）的封装。
+   - **绘制流程**：
+     1. 当视图需要绘制时（例如调用 `invalidate()`），`ViewRootImpl` 会通过 `Surface.lockCanvas()` 从 `SurfaceFlinger` 申请一个图形缓冲区，并绑定到一个 `Canvas` 对象。
+     2. 该 `Canvas` 直接操作缓冲区的像素数据（通过关联的 `Bitmap`）。
+     3. 所有视图的 `onDraw()` 方法依次在此 `Canvas` 上绘制，最终通过 `Surface.unlockCanvasAndPost()` 将缓冲区提交给 `SurfaceFlinger` 合成并显示。
+
+   java
+
+   复制
+
+   ```
+   // 伪代码：ViewRootImpl 中软件绘制的逻辑
+   Surface surface = getSurface();
+   Canvas canvas = surface.lockCanvas(dirtyRect);
+   try {
+       view.draw(canvas); // 递归调用 View 树的 draw() 方法
+   } finally {
+       surface.unlockCanvasAndPost(canvas);
+   }
+   ```
+
+2. **硬件加速绘制（Hardware Acceleration）**
+   当启用硬件加速（API 14+ 默认开启）：
+
+   - **Canvas 的抽象化**：`Canvas` 不再直接操作像素，而是记录绘制命令到显示列表（`DisplayList`）。
+   - **绘制流程**：
+     1. 系统为视图树生成一个 `DisplayListCanvas`，用于记录绘制操作（如 `drawRect()`, `drawText()`）。
+     2. `onDraw()` 方法中的 `Canvas` 实际上是 `DisplayListCanvas`，其操作被转换为 GPU 指令。
+     3. 所有显示列表由 `RenderThread` 线程异步提交给 GPU 渲染，最终通过 `SurfaceFlinger` 合成。
+
+   java
+
+   复制
+
+   ```
+   // 伪代码：硬件加速下的 Canvas 记录
+   DisplayListCanvas canvas = View.startRecording();
+   view.onDraw(canvas); // 记录绘制命令到显示列表
+   View.finishRecording();
+   RenderThread.queueDisplayList(displayList); // 提交给 GPU
+   ```
+
+------
+
+### **关键点总结**
+
+| **场景**     | **Canvas 类型**     | **底层机制**                        | **性能特点**            |
+| :----------- | :------------------ | :---------------------------------- | :---------------------- |
+| **软件绘制** | `SoftwareCanvas`    | 直接操作像素缓冲区（Bitmap）        | 主线程阻塞，适合简单 UI |
+| **硬件加速** | `DisplayListCanvas` | 记录 GPU 指令（OpenGL ES / Vulkan） | 异步渲染，支持复杂动画  |
+
+------
+
+### **常见疑问解答**
+
+1. **为什么 `Canvas` 是只读的？**
+
+   - 在硬件加速下，`Canvas` 是显示列表的记录器，不支持直接修改像素（如 `getPixel()`）。
+   - 软件绘制中，虽然可以操作像素，但直接修改缓冲区可能破坏渲染流程。
+
+2. **自定义 `Canvas` 是否可能？**
+
+   - 可以创建离屏 `Canvas`（如通过 `Bitmap.createBitmap()`）：
+
+     ```java
+     Bitmap bitmap = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888);
+     Canvas customCanvas = new Canvas(bitmap);
+     ```
+
+   - 但视图系统的 `onDraw()` 中的 `Canvas` 由系统管理，不可替换。
+
+3. **Canvas 的生命周期**
+
+   - 每次重绘（`invalidate()`）时，系统会重新生成或复用 `Canvas` 对象，开发者无需手动管理。
+
+------
+
+### **使用场景建议**
+
+- **软件绘制**：兼容旧设备或需要直接操作像素（如自定义绘图工具）。
+- **硬件加速**：现代应用默认选择，支持复杂动画和高效渲染。

@@ -2,7 +2,11 @@
 
 ## 一、从launcher创建app
 
+博客地址：https://juejin.cn/post/6844903789971898382
+
 博客地址：http://gityuan.com/2016/03/26/app-process-create/
+
+博客地址：https://blog.csdn.net/C_biubiubiu/article/details/127099411?spm=1001.2014.3001.5502
 
 ### Launcher 启动 App 流程（Andorid 10）
 

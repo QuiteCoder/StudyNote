@@ -1,16 +1,28 @@
 # Handler原理
 
-## 1、`Handler` 被设计出来的原因？有什么用？
+## 1、Message的缓存最大数量
 
-提供一种方便线程间通信的解决方案
+最大缓存数 = 50个
+
+```java
+// Message.java
+void recycleUnchecked() {
+    // ... 清空 Message 的状态 ...
+    synchronized (sPoolSync) {
+        if (sPoolSize < MAX_POOL_SIZE) { // MAX_POOL_SIZE = 50
+            next = sPool;
+            sPool = this;
+            sPoolSize++;
+        }
+    }
+}
+```
 
 
 
-## 2、`Handler` 的基本原理
+## 2、`Handler` 与MessageQueue是一对一？
 
-外部通过 `Handler` 往 `MessageQueue` 里插入任务
-`Looper` 在做死循环，一直从 `MessageQueue` 中获取任务
-如果此时任务为空或当前没有需要执行的任务，则先判断 `IdleHandler`，`IdleHandler`为空则阻塞
+是多对一，想一想，在Activity中可以创建很多个Handler，默认绑定了mainLooper
 
 
 
@@ -655,6 +667,20 @@ public boolean onTouchEvent(MotionEvent event) {
 * 【相关库：】https://github.com/android-notes/Cockroach
 
 
+
+## 18、Looper是如何被唤醒的？
+
+Android中的Looper通过结合Java层和Native层的机制实现阻塞与唤醒，其核心在于MessageQueue的`next()`方法以及底层的`epoll`系统调用。以下是详细的工作流程：
+
+1. **消息循环与阻塞**：
+   - Looper在循环中调用`MessageQueue.next()`获取下一条消息。
+   - 当队列为空或下一条消息的执行时间未到时，`next()`会调用Native方法`nativePollOnce()`进入阻塞状态。
+2. **Native层的阻塞机制**：
+   - `nativePollOnce()`最终调用到Native的`Looper::pollOnce()`，使用`epoll`监听文件描述符（如管道或eventfd）。
+   - `epoll`会等待文件描述符的可读事件，若无事件则线程进入休眠，避免CPU资源浪费。
+3. **消息入队与唤醒**：
+   - 当通过`Handler`发送消息时，消息被插入`MessageQueue`。若新消息需要立即处理（如插入队首或执行时间早于当前队首消息），则调用`nativeWake()`。
+   - `nativeWake()`向Native层的文件描述符写入数据，触发`epoll`检测到可读事件，从而解除阻塞。
 
 
 

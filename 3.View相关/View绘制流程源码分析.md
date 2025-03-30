@@ -12,6 +12,10 @@
 
 ![image](https://raw.githubusercontent.com/QuiteCoder/MyMdImages/main/View%E7%9A%84%E7%BB%98%E5%88%B6%E6%B5%81%E7%A8%8B.png)
 
+![](E:\StudyNote\3.View相关\Activity被加载到屏幕的过程.png)
+
+
+
 
 
 流程：
@@ -20,15 +24,15 @@
 
 2、在performLaunchActivity()中委托Instrumentation通过反射构建出Activity的实例
 
-3、然后Actiity实例先是调用了attach方法，构建出了PhoneWIndow
+2.1、然后Actiity实例先是调用了attach方法，构建出了**PhoneWIndow**，
 
-4、Actiity调用onCreate方法，开始setContentView()
+2.2、接着Actiity的onCreate方法被调用，我们Activity中写的setContentView()跟着被调用，PhoneWindow.installDecor()初始**DecorView**，布局的控件都被实例化保存在DecorView当中，这时候performLaunchActivity()结束，返回activity实例
 
-5、执行PhoneWindow.installDecor()初始DecorView。注意：DecorView内部持有PhoneWindow和ViewRootImpl
+3.Activity的onStart方法被调用，这时候Activity的window可见，无焦点，控件不可见，
 
-6、Activity调用onResume方法，WindowManagerGlobal调用addView方法构建ViewRootImpl，并让其管理DecorView
+6、Activity调用onResume方法，WindowManagerGlobal调用addView方法构建**ViewRootImpl**，并让其管理DecorView
 
-7、ViewRootImpl.setView()，先执行requestLayout()，依次对view进行测量、布局、绘制，接着通过Bindler给WindowManagerSerivce.addWindow()
+7、ViewRootImpl.setView()，先执行requestLayout()，依次对view进行测量、布局、绘制，接着通过Bindler给WindowManagerSerivce.addWindow()，构建出surface传给surfaceFlinger进行屏幕绘制
 
 
 

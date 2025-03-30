@@ -10,15 +10,15 @@
 
 * JDK7：段懒加载，尽可能使用 Volatile & cas 避免加锁
 
-  * JDK7 以前段（Segment）直接初始化，现在是懒加载的
-
   * 由于段懒加载，A线程访问时在初始化段A，B线程同时也在访问段A则存在可见性问题，所以 JDK7 使用了对数组的 Volatile：`Unsafe.getObjectVolatile()`
 
-    <img src="ConcurrentHashMap_jdk7.png" style="zoom:50%;" />
+    ![](E:\StudyNote\java\数据结构\分段锁.png)
 
-* JDK8：摒弃段，基于 HashMap 原理的并发实现，对于不必加锁的地方使用 Volatile 进行访问，在一些没有办法的场景如写入，对很小的一个范围进行加锁
+  
 
-  <img src="ConcurrentHashMap_jdk8.png" style="zoom:50%;" />
+* JDK8：摒弃段，基于 HashMap 原理的并发实现，对于不必加锁的地方使用 Volatile 进行访问，在一些没有办法的场景，如写入，对很小的一个范围进行加锁
+
+  ![](E:\StudyNote\java\数据结构\CAS+同步锁.png)
 
 #### 如何计数
 
