@@ -354,6 +354,237 @@ CoroutineExceptionHandler:java.lang.IndexOutOfBoundsException  [java.lang.NullPo
 
 ## 6、冷数据流Flow
 
+### 基本用法：
+
+flow的collect像job.join()一样，需要等待flow收集完成才往下执行。
+
+调用了collect才会让simpleFlow()真正被调用起来，像Rxjava最后必须调用subscribe一样。
+
+```kotlin
+// 可以省略suspend关键字
+suspend fun simpleFlow() = flow<Int> {
+    for (i in 1..3) {
+        delay(1000)
+        emit(i) // 发射，产生一个元素
+    }
+}
+
+fun main() {
+    runBlocking {
+        val job = launch {
+            for (i in 1..3) {
+                delay(1000)
+                println("launch0 $i")
+            }
+        }
+        job.join()
+        // collect收集emit产生的元素
+        simpleFlow().collect(){value -> println("flow $value") }
+        println("runBlocking end")
+    }
+    println("main end")
+}
+```
+
+输出结果：
+
+```
+launch0 1
+launch0 2
+launch0 3
+flow 1
+flow 2
+flow 3
+runBlocking end
+main end
+```
+
+
+
+### **流的连续性：**
+
+- 流的每次单独手机都是按顺序执行的，除非使用特殊操作符。
+- 从上游到下游每个过度操作符都会处理每个发射出的值，然后再交给末端操作符。
+
+```kotlin
+fun main() {
+    runBlocking {
+        (1..5).asFlow().filter {
+            println("Filter $it")
+            it % 2 == 0 // 过滤偶数
+        }.map {
+            println("map $it")
+            "string $it" // 对流中的数据进行修改/转换
+        }.collect {
+            println("collect $it") // 偶数才会流到这里
+        }
+    }
+}
+```
+
+输出结果：
+
+```
+Filter 1
+Filter 2
+map 2
+collect string 2
+Filter 3
+Filter 4
+map 4
+collect string 4
+Filter 5
+```
+
+
+
+### 流构建器：
+
+- flowOf构建器定义了一个发射固定值集的流。
+- 使用.asFlow()扩展函数，可以将各种集合与序列转换为流。
+
+```kotlin
+runBlocking {
+    flowOf("one", 2, "three", 4, 5)
+    .onEach { delay(1000) }
+    .collect { println("collect $it") }
+
+    (1..3).asFlow().collect{value -> println(value) }
+}
+```
+
+
+
+### 流的上下文：
+
+- 流的收集总是在调用协程的上下文中发生，流的该属性称为上下文保存。
+- flow{...}构建器中的代码必须遵循上下文保存属性，并且不允许从其他上下文中发射（emit）。
+- flowOn操作符，该函数用于更改流发射的上下文。
+
+```kotlin
+fun simpleFlow() = flow<Int> {
+    for (i in 1..3) {
+        delay(1000) // 假设耗时操作
+        emit(i)
+    }
+}.flowOn(Dispatchers.IO) // 切换子线程处理
+
+fun main() {
+    runBlocking {
+        simpleFlow().collect{value -> println("collect $value") }
+    }
+}
+```
+
+
+
+### 启动流：
+
+使用launchIn替换collect，返回Job对象，我们可以单独在协程中启动流的收集，可以指定在主线程还是子线程中收集。
+
+```kotlin
+fun events() = flow<Int> {
+    for (i in 1..3) {
+        delay(1000) // 假设耗时操作
+        emit(i)
+    }
+}.flowOn(Dispatchers.Default) // 例如通过算法计算后获取的结果
+
+fun main() {
+    runBlocking {
+        val job = events().onEach { value -> println("onEach $value") }
+            .launchIn(CoroutineScope(Dispatchers.IO)) // 更改收集的线程为子线程
+        delay(1000)
+        job.cancelAndJoin() // 等待并且取消
+    }
+}
+```
+
+
+
+### 流的取消：
+
+```kotlin
+// 方式一：通过launchIn返回的Job对象进行cancle
+// 方式二：withTimeoutOrNull设置倒计时自动取消
+withTimeoutOrNull(2500) {
+    events().collect{value -> println("collect $value") }
+}
+```
+
+取消监测：
+
+- 流构建器对每个发射值执行附加的ensureActive检测以进行取消；
+- 处于性能考虑，大多数其他流操作不会自行执行其他取消监测，必须明确监测是否取消；
+- 通过cancellable操作符来执行此操作。
+
+```kotlin
+fun events() = flow<Int> {
+    for (i in 1..5) {
+        delay(1000) // 假设耗时操作
+        emit(i)
+    }
+}.flowOn(Dispatchers.Default) // 例如通过算法计算后获取的结果
+
+fun main() {
+    runBlocking {
+        // 这个flow发射的元素比较慢，可以在cancel之后让flow不再发射数据
+        events().collect{
+            value ->
+            println("collect $value")
+            if(value > 2) cancel()
+        }
+        // 这种情况处于繁忙循环，不能马上停止flow发射数据
+        (1..5).asFlow().collect {value ->
+            println("collect $value")
+            if(value > 2) cancel()}
+        // 通过操作符cancellable让flow每次发射前做是否取消的判断
+        (1..5).asFlow().cancellable().collect {value ->
+            println("collect $value")
+            if(value > 2) cancel()}
+    }
+}
+```
+
+
+
+### 背压：
+
+背压意思是：emit发射的数据比collect处理数据快，可以用水管中水的压力做比喻。
+
+buffer()，并发运行流种发射元素的代码。就是让emit发射到缓存区中，然后collect慢慢从缓存区处理数据。
+
+conflate()，合并发射项，不对每个值进行处理。collect获取到emit最新的数据。
+
+collectLatest()，只收集发射的最后一个值。
+
+当必须更改CoroutineDispatcher时，flowOn操作符使用了相同的缓冲机制，但是buffer函数显式地请求缓冲而不改变执行上下文。
+
+```kotlin
+fun events() = flow<Int> {
+    for (i in 1..5) {
+        delay(100)
+        emit(i)
+    }
+}
+
+fun main() {
+    runBlocking {
+        events()
+//            .buffer(50)
+//            .conflate()
+            .collectLatest{
+//            .collect{
+            value ->
+                delay(200)
+            println("collect $value")
+        }
+    }
+}
+```
+
+
+
 StateFlow
 
 SharedFlow
