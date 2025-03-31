@@ -556,7 +556,7 @@ buffer()，并发运行流种发射元素的代码。就是让emit发射到缓�
 
 conflate()，合并发射项，不对每个值进行处理。collect获取到emit最新的数据。
 
-collectLatest()，只收集发射的最后一个值。
+collectLatest()，只收集发射的最后一个值，并不是一定只会收集到最后一个值，要看背压的强度。
 
 当必须更改CoroutineDispatcher时，flowOn操作符使用了相同的缓冲机制，但是buffer函数显式地请求缓冲而不改变执行上下文。
 
@@ -573,7 +573,7 @@ fun main() {
         events()
 //            .buffer(50)
 //            .conflate()
-            .collectLatest{
+            .collectLatest{ 
 //            .collect{
             value ->
                 delay(200)
@@ -585,13 +585,498 @@ fun main() {
 
 
 
-StateFlow
+### 转换操作符：
 
-SharedFlow
+对流数据进行加工，还可以重复emit数据
+
+```kotlin
+    fun formatData(int: Int) : String {
+        return "formatData $int"
+    }
+
+    @Test
+    fun flowTest() = runBlocking {
+        (1..3).asFlow().transform { value ->
+            emit("append $value")
+            emit(formatData(value))
+        }.collect{value -> println("collect $value") }
+    }
+```
+
+输出结果：
+
+```
+collect append 1
+collect formatData 1
+collect append 2
+collect formatData 2
+collect append 3
+collect formatData 3
+```
+
+
+
+限长操作符：
+
+take操作符，限制收集元素的数量。
+
+```kotlin
+    fun listFlow() = flow<Int> {
+        for (i in 1..3) {
+            emit(i)
+        }
+    }
+
+    @Test
+    fun limitLengthOperator() = runBlocking {
+        listFlow().take(2).collect{value -> println("collect $value") }
+    }
+```
+
+输出结果：
+
+```
+collect 1
+collect 2
+```
+
+
+
+### 末端操作符：
+
+1. 转换为集合
+
+- **`toList()`**: 将 Flow 转换为 List
+
+  ```kotlin
+  val list = flow.toList()
+  ```
+
+- **`toSet()`**: 将 Flow 转换为 Set
+
+  ```kotlin
+  val set = flow.toSet()
+  ```
+
+2. 获取单个值
+
+- **`first()`**: 获取第一个发射的值
+
+  ```kotlin
+  val first = flow.first()
+  ```
+
+- **`firstOrNull()`**: 获取第一个值，如果没有则返回 null
+
+- **`single()`**: 期望 Flow 只发射一个值，否则抛出异常
+
+- **`singleOrNull()`**: 如果 Flow 发射单个值则返回它，否则返回 null
+
+3. 聚合操作
+
+- **`count()`**: 计算发射的值的数量
+
+  ```kotlin
+  val count = flow.count()
+  ```
+
+- **`reduce()`**: 对值进行累积操作
+
+  ```kotlin
+  val sum = flow.reduce { accumulator, value -> accumulator + value }
+  ```
+
+- **`fold()`**: 类似 reduce，但有初始值
+
+  ```kotlin
+  val sum = flow.fold(0) { accumulator, value -> accumulator + value }
+  ```
+
+4. 查找操作
+
+- **`find()`**: 查找第一个满足条件的值
+
+  ```kotlin
+  val even = flow.find { it % 2 == 0 }
+  ```
+
+- **`findLast()`**: 查找最后一个满足条件的值
+
+5. 包含检查
+
+- **`contains()`**: 检查是否包含某个值
+
+  ```kotlin
+  val hasFive = flow.contains(5)
+  ```
+
+6. 启动 Flow
+
+- **`launchIn()`**: 在指定的 CoroutineScope 中启动 Flow 的收集
+
+  ```kotlin
+  flow.onEach { println(it) }.launchIn(viewModelScope)
+  ```
+
+
+
+### 组合流：
+
+通过一方flow调用zip，传入对方flow，可以将两组流中的数据合并输出，长度已短的一方为准。
+
+```kotlin
+    @Test
+    fun zipFlow() = runBlocking {
+        val intFlow = (1..6).asFlow()
+        val stringFlow = flowOf("one", "two", "three")
+        intFlow.zip(stringFlow) {a, b -> "$a -> $b"}.collect{value-> println(value) }
+    }
+```
+
+输出结果：
+
+```
+1 -> one
+2 -> two
+3 -> three
+```
+
+
+
+### 展平流：
+
+将两个流组合成新的流
+
+```kotlin
+    fun requestFlow(i: Int) = flow<String> {
+        emit("$i: First")
+        delay(500)
+        emit("$i: Second")
+    }
+
+    @Test
+    fun flatMapFlow() = runBlocking {
+        val intFlow = (1..3).asFlow()
+        intFlow.onEach { delay(100) }
+//            .flatMapConcat {
+            .flatMapMerge {
+//            .flatMapLatest {
+            value -> requestFlow(value) }.collect{ println(it) }
+    }
+```
+
+flatMapConcat连接模式
+
+输出结果：
+
+```
+1: First
+1: Second
+2: First
+2: Second
+3: First
+3: Second
+```
+
+flatMapMerge合并模式
+
+输出结果：
+
+```
+1: First
+2: First
+3: First
+1: Second
+2: Second
+3: Second
+```
+
+flatMapLatest最新展平模式
+
+输出结果：
+
+```
+1: First
+2: First
+3: First
+3: Second
+```
+
+
+
+### 流的异常处理：
+
+catch操作符给发射端捕获异常
+
+try-catch对收集端捕获异常
+
+```kotlin
+    fun requestFlow(i: Int) = flow<String> {
+        emit("$i: First")
+        emit("$i: Second")
+//        throw IndexOutOfBoundsException()
+    }.catch { exception-> println(exception) }
+
+    @Test
+    fun flatMapFlow() = runBlocking {
+        try {
+            val flow = requestFlow(10)
+            flow.collect{value ->
+                println(value)
+                if (value.contains("Second")) {
+                    throw IllegalArgumentException()
+                }
+            }
+        } catch (e: IllegalArgumentException) {
+            println(e)
+        }
+    }
+```
+
+
+
+### 流的完成：
+
+使用onCompletion不但能够获取异常信息，而且能够在flow结束时做收尾操作。
+
+```kotlin
+@Test
+    fun flowOnCompletion() = runBlocking {
+        val flow = flowOf("one", "two", "three")
+        flow.onCompletion {
+                    exception-> println("onCompletion $exception")
+                println("flow is end!")
+            }
+            .collect{value ->
+                println(value)
+                if (value.contains("two")) {
+                    throw IllegalArgumentException()
+                }
+            }
+    }
+```
+
+输出结果：
+
+```
+one
+two
+onCompletion java.lang.IllegalArgumentException
+flow is end!
+```
+
+
+
+### StateFlow
+
+特点：跟LiveData非常像
+
+那么 `StateFlow` 和 `LiveData` 有什么区别吗？
+
+有两点区别：
+
+- 第一点，`StateFlow` 必须有初始值，`LiveData` 不需要。
+- 第二点，当 View 变为 STOPPED 状态时，LiveData.observe() 会自动取消注册使用方，而从 StateFlow 或任何其他数据流收集数据则不会取消注册使用方。
+
+```kotlin
+class MainViewModel : ViewModel() {
+    val selected = MutableStateFlow<Boolean>(false)
+}
+```
+
+对于 `StateFlow` 在界面销毁的时仍处于活跃状态，有两种解决方法：
+
+- 使用 `ktx` 将 `Flow` 转换为 `LiveData`。
+- 在界面销毁的时候，手动取消（这很容易被遗忘）。
+
+```kotlin
+class LatestNewsActivity : AppCompatActivity() {
+    ...
+    // Coroutine listening for UI states
+    private var uiStateJob: Job? = null
+
+    override fun onStart() {
+        super.onStart()
+        // Start collecting when the View is visible
+        uiStateJob = lifecycleScope.launch {
+            latestNewsViewModel.uiState.collect { uiState -> ... }
+        }
+    }
+
+    override fun onStop() {
+        // Stop collecting when the View goes to the background
+        uiStateJob?.cancel()
+        super.onStop()
+    }
+}
+```
+
+
+
+### SharedFlow
+
+特点：它可以将已发送过的数据发送给新的订阅者。
+
+当你有如下场景时，需要使用 `SharedFlow`：
+
+- 发生订阅时，需要将过去已经更新的n个值，同步给新的订阅者。
+- 配置缓存策略。
+
+```kotlin
+class MainViewModel : ViewModel() {
+    val sharedFlow = MutableSharedFlow<Int>(
+        5 // 参数一replay ：当新的订阅者Collect时，发送几个已经发送过的数据给它
+        , 3 // 参数二extraBufferCapacity ：减去replay，MutableSharedFlow还缓存多少数据
+        , BufferOverflow.DROP_OLDEST // 参数三：缓存策略，三种 丢掉最新值、丢掉最旧值和挂起
+    )
+}
+```
+
+`emit` 方法：当缓存策略为 `BufferOverflow.SUSPEND` 时，`emit` 方法会挂起，直到有新的缓存空间。
+
+`tryEmit` 方法：`tryEmit` 会返回一个 `Boolean` 值，`true` 代表传递成功，`false` 代表会产生一个回调，让这次数据发射挂起，直到有新的缓存空间。
+
+```kotlin
+// 2. 发射值
+viewModelScope.launch {
+    sharedFlow.emit(value) // 在协程中发射
+}
+// 或
+sharedFlow.tryEmit(value) // 尝试立即发射
+```
+
+
 
 
 
 ## 7、热数据流Channel
+
+用途：用于协程之间的通信
+
+
+
+#### Channel的容量
+
+```kotlin
+val channel = Channel<Int>() // 默认容量0
+......................... 10) // 自定义容量
+...........................Channel.CONFLATED) // 容量1，特点：只保留最新发送的元素
+.......................... Channel.BUFFERED)  // 默认缓冲大小是 64 (可通过 kotlinx.coroutines.channels.defaultBuffer 系统属性修改)
+.......................... Channel.UNLIMITED) // 特点：缓冲区大小只受内存限制, 发送方永远不会挂起（除非内存耗尽）									
+```
+
+Channel实际上是一个队列，队列中一定存在缓冲区，那么一旦这个缓冲区满了，并且一直没有人调用receive消费，send就需要挂起。故意让接收端的节奏放慢，发现send总是会挂起，知道receive之后才继续往下执行。
+
+```kotlin
+@Test
+fun channelTest() = runBlocking<Unit> {
+    val channel = Channel<Int>(10) // 配置缓冲区容量10
+    val job = launch(Dispatchers.IO) {
+        var i = 0;
+        while (true) {
+            delay(1000)
+            channel.send(++i)
+            println("send $i")
+        }
+    }
+    val job2 = launch {
+        while (true) {
+            val receive = channel.receive()
+            println("receive $receive")
+        }
+    }
+    joinAll(job, job2)
+}
+```
+
+
+
+#### Channel迭代器
+
+```Kotlin
+@Test
+fun channelTest() = runBlocking<Unit> {
+    val channel = Channel<Int>(10)
+    val job = launch(Dispatchers.IO) {
+        var i = 0;
+        repeat(5) {
+            // 把数据发送到缓存中
+            channel.send(++i)
+        }
+    }
+    val job2 = launch {
+        val iterator = channel.iterator()
+        while (iterator.hasNext()) {
+            iterator.next().let { println("iterator $it") }
+        }
+    }
+    joinAll(job, job2)
+}
+```
+
+输出结果：
+
+```
+iterator 1
+iterator 2
+iterator 3
+iterator 4
+iterator 5
+```
+
+
+
+#### produce与actor：
+
+produce 可以得到一个供外部消费的Channel。
+
+actor 可以得到一个供外部生产的Channel。
+
+```kotlin
+@Test
+fun channelTest() = runBlocking<Unit> {
+    val receiveChannel = produce<Int>{
+        repeat(10) {
+            send(it)
+        }
+    }
+    launch {
+        for (i in receiveChannel) {
+            println("receiveChannel received: $i")
+        }
+    }
+
+    val sendChannel = actor<Int> {
+        while (true) {
+            receive().let { println("sendChannel receive: $it") }
+        }
+    }
+
+    launch {
+        repeat(10) {
+            sendChannel.send(it)
+        }
+    }
+}
+```
+
+
+
+#### Channel的关闭：
+
+channel.send之后，调用了channel.close()，那么channel.isClosedForSend = true。
+
+当channel.receive没有消费完全部数据，那么channel.isClosedForReceive = false，例如channel中缓存有3个数据，必须调用3次receive进行消费，这样channel.isClosedForReceive = true
+
+
+
+#### BroadcastChannel：
+
+普通Channel是一对一的，如果
+
+
+
+
 
 ## 8、多路复用
 
