@@ -1,10 +1,8 @@
 # Kotlin面试总结
 
-## 一、协程
+# 一、协程
 
 Kotlin 协程（Coroutines）是 Kotlin 语言中用于简化异步编程的轻量级并发工具。它通过挂起（suspend）和恢复（resume）机制，允许开发者以同步的方式编写异步代码，从而避免回调地狱（Callback Hell）和复杂的线程管理。
-
-以下是 Kotlin 协程的实现与原理的详细说明：
 
 ------
 
@@ -22,11 +20,13 @@ suspend fun fetchData(): String {
 }
 ```
 
-#### 1.2 协程构建器（Coroutine Builders）
+#### 1.2 协程作用域构建器（Coroutine Builders）
 
 - Kotlin 提供了几种协程构建器来启动协程：
-  - `launch`：启动一个不会返回结果的协程（类似于 `Thread`）。
-  - `async`：启动一个可以返回结果的协程（类似于 `Future`）。
+  - `launch`：启动一个不会返回结果的协程job（类似于 `Thread`）。
+  - `async`：启动一个可以返回结果的协程deferred（类似于 `Future`）。
+  - `coroutineScope`：创建一个新的协程作用域，所有子协程完成前不会结束。
+  - `supervisorScope`：类似于coroutineScope，但子协程的失败不会影响其他子协程
   - `runBlocking`：阻塞当前线程，直到协程执行完毕（主要用于测试或主函数中）。
 
 ```kotlin
@@ -80,6 +80,14 @@ fun main() = runBlocking {
 
 ### 2. **Kotlin 协程的实现原理**
 
+总结：尾随闭包被编译器生成SuspendLambda的子类，其中invokeSuspend方法就是闭包中的代码实现，最后会被封装成Runnable的成员变量，其中run方法执行的代码就是invokeSuspend的代码。
+
+挂起：当遇到第一个挂起方法，如delay，withContext，会返回一个COROUTINE_SUSPENDED标记，让invokeSuspend方法就此结束。
+
+恢复：当挂起方法执行完，就相当DispatchedTask的run方法执行完成，然后内部调用resumeWith对上级协程进行重新调用其invokeSuspend方法。
+
+
+
 #### 2.1 挂起与恢复机制
 
 - Kotlin 协程的挂起和恢复是通过 **状态机** 实现的。
@@ -126,6 +134,191 @@ class FetchDataStateMachine : Continuation<String> {
   - `Dispatchers.Default`：适用于 CPU 密集型任务。
   - `Dispatchers.Unconfined`：不限制线程，协程在调用线程启动，在恢复时可能切换到其他线程。
 
+总结：
+
+**Dispatchers.Main**：通过 AndroidDispatcherFactory 构建 HandlerContext，并把mainLooper传进去，最终通过handler.post()的方式完成调度。
+
+**Dispatchers.Default**：实例化DefaultScheduler 配置 线程池参数，底层由**CoroutineScheduler**实现线程池机制，调度任务。
+
+**Dispatchers.IO**：由LimitedParallelism对**CoroutineScheduler**的扩展用法，根据任务的最大并行数量，对新任务排队控制。
+
+**Dispatchers.Unconfined**：isDispatchNeeded()方法直接返回false，不做调度处理，在当前线程执行任务。
+
+```kotlin
+public actual object Dispatchers {
+    @JvmStatic
+    public actual val Main: MainCoroutineDispatcher get() = MainDispatcherLoader.dispatcher
+    @JvmStatic
+    public val IO: CoroutineDispatcher = DefaultIoScheduler
+    @JvmStatic
+    public actual val Default: CoroutineDispatcher = DefaultScheduler
+    @JvmStatic
+    public actual val Unconfined: CoroutineDispatcher = kotlinx.coroutines.Unconfined
+}
+```
+
+**Dispatchers.Main的创建流程：**
+
+总结：通过 AndroidDispatcherFactory 构建 HandlerContext，并把mainLooper传进去，最终通过handler.post()的方式完成调度。
+
+```kotlin
+// 通过 AndroidDispatcherFactory 构建 HandlerContext，并把mainLooper传进去
+internal class AndroidDispatcherFactory : MainDispatcherFactory {
+
+    override fun createDispatcher(allFactories: List<MainDispatcherFactory>): MainCoroutineDispatcher {
+        val mainLooper = Looper.getMainLooper() ?: throw IllegalStateException("The main looper is not available")
+        return HandlerContext(mainLooper.asHandler(async = true))
+    }
+}
+```
+
+Dispatchers.Main进行调度的时候dispatch() 方法，只不过是用handler往主线程Looper中post任务。
+
+```kotlin
+internal class HandlerContext private constructor(
+    private val handler: Handler,
+    private val name: String?,
+    private val invokeImmediately: Boolean
+) : HandlerDispatcher(), Delay {
+   
+    constructor(
+        handler: Handler,
+        name: String? = null
+    ) : this(handler, name, false)
+
+    ...
+
+    override fun dispatch(context: CoroutineContext, block: Runnable) {
+        // handler内部是mainLooper，所以任务都往主线程放
+        if (!handler.post(block)) {
+            cancelOnRejection(context, block)
+        }
+    }
+}
+```
+
+
+
+**Dispatchers.Default创建流程**
+
+总结：实例化DefaultScheduler 配置 线程池参数，底层由coroutineScheduler实现线程池机制，调度任务。
+
+```kotlin
+// 指向的就是DefaultScheduler，底层有线程池
+internal object DefaultScheduler : SchedulerCoroutineDispatcher(
+    CORE_POOL_SIZE, MAX_POOL_SIZE, // 仅仅配置线程池的参数
+    IDLE_WORKER_KEEP_ALIVE_NS, DEFAULT_SCHEDULER_NAME
+) {
+    ...
+}
+```
+
+```kotlin
+internal open class SchedulerCoroutineDispatcher(
+    private val corePoolSize: Int = CORE_POOL_SIZE,
+    private val maxPoolSize: Int = MAX_POOL_SIZE,
+    private val idleWorkerKeepAliveNs: Long = IDLE_WORKER_KEEP_ALIVE_NS,
+    private val schedulerName: String = "CoroutineScheduler",
+) : ExecutorCoroutineDispatcher() {
+
+    override val executor: Executor
+    get() = coroutineScheduler
+
+    // This is variable for test purposes, so that we can reinitialize from clean state
+    private var coroutineScheduler = createScheduler()
+
+    private fun createScheduler() =
+    CoroutineScheduler(corePoolSize, maxPoolSize, idleWorkerKeepAliveNs, schedulerName)
+
+    // 任务会调度到线程池中
+    override fun dispatch(context: CoroutineContext, block: Runnable): Unit = coroutineScheduler.dispatch(block)
+}
+```
+
+
+
+**Dispatchers.IO的创建流程：**
+
+总结：由limitedParallelism对coroutineScheduler的扩展用法，根据任务的最大并行数量，对新任务排队控制。
+
+```kotlin
+internal object DefaultScheduler : ExperimentalCoroutineDispatcher() {
+    val IO: CoroutineDispatcher = LimitingDispatcher(
+        this,
+        systemProp(IO_PARALLELISM_PROPERTY_NAME, 64.coerceAtLeast(AVAILABLE_PROCESSORS)),
+        "Dispatchers.IO",
+        TASK_PROBABLY_BLOCKING
+    )
+    //···
+}
+
+private class LimitingDispatcher(
+    private val dispatcher: ExperimentalCoroutineDispatcher,
+    //···
+) : ExecutorCoroutineDispatcher(), TaskContext, Executor {
+
+    override val executor: Executor
+        get() = this
+
+    override fun execute(command: Runnable) = dispatch(command, false)
+
+    override fun dispatch(context: CoroutineContext, block: Runnable) = dispatch(block, false)
+
+    private fun dispatch(block: Runnable, tailDispatch: Boolean) {
+        var taskToSchedule = block
+        while (true) {
+            //没有超过限制，立即分发任务
+            if (inFlight <= parallelism) {
+                dispatcher.dispatchWithContext(taskToSchedule, this, tailDispatch)
+                return
+            }
+            //任务超过限制，则加入等待队列
+            queue.add(taskToSchedule)
+            //···
+        }
+    }
+}
+```
+
+
+
+**Dispatchers.Unconfined的创建流程：**
+
+总结：isDispatchNeeded()方法直接返回false，不做调度处理，在当前线程执行任务。
+
+```kotlin
+internal object Unconfined : CoroutineDispatcher() {
+
+    // 在调用dispatch()之前会判断isDispatchNeeded()是否返回true，否则不进行调度，在当前线程执行任务
+    override fun isDispatchNeeded(context: CoroutineContext): Boolean = false
+
+  
+}
+```
+
+```kotlin
+// DispatchedContinuation
+verride fun resumeWith(result: Result<T>) {
+        val context = continuation.context
+        val state = result.toState()
+    	// 调度器Dispatchers.Unconfined，isDispatchNeeded()直接返回false
+        if (dispatcher.isDispatchNeeded(context)) {
+            _state = state
+            resumeMode = MODE_ATOMIC
+            dispatcher.dispatch(context, this)
+        } else {
+            // 将任务进行缓存，串行执行任务
+            executeUnconfined(state, MODE_ATOMIC) {
+                withCoroutineContext(this.context, countOrElement) {
+                    continuation.resumeWith(result)
+                }
+            }
+        }
+    }
+```
+
+
+
 
 
 ## 3、协程启动模式
@@ -156,23 +349,25 @@ current Thread = main
 
 协程常用的相关API：
 
-GlobalScope，生命周期是porcess级别，即使Activity或Fragment已经被销毁，协程仍然再执行;
 
-MainScope，再Activity中使用，可以再onDestory()中取消协程;
-
-viewModelScope，只能挂在ViewModel中使用，绑定ViewModel的生命周期；
-
-lifecycleScope，只能再Activity、Fragment中使用，会绑定Activity和Fragment的生命周期。
 
 
 
 ## 4、**协程的作用域构建器：**
 
-runBloking：是常规函数，**阻塞**当前线程来等待子协程的结束。
+- GlobalScope：生命周期是porcess级别，即使Activity或Fragment已经被销毁，协程仍然再执行;
 
-coroutineScope：是挂起函数，**挂起**函数会释放底层线程用于其他用途，一个子协程挂了，其他子协程会一起挂掉。
+- MainScope：再Activity中使用，可以再onDestory()中取消协程;
 
-supervisorScope：是挂起函数，一个子协程挂了，其他子协程不受影响，继续执行。但是在父作用域中发生错误，全部子协程都会退出。
+- viewModelScope：只能在ViewModel中使用，绑定ViewModel的生命周期；
+
+- lifecycleScope，只能在Activity、Fragment中使用，会绑定Activity和Fragment的生命周期。
+- runBloking：是常规函数，**阻塞**当前线程来等待子协程的结束。
+
+- coroutineScope：是挂起函数，**挂起**函数会释放底层线程用于其他用途，一个子协程挂了，其他子协程会一起挂掉。
+
+- supervisorScope：是挂起函数，一个子协程挂了，其他子协程不受影响，继续执行。但是在父作用域中发生错误，全部子协程都会退出。
+
 
 ```kotlin
 runBlocking {
@@ -1072,15 +1267,132 @@ channel.send之后，调用了channel.close()，那么channel.isClosedForSend = 
 
 #### BroadcastChannel：
 
-普通Channel是一对一的，如果
+普通Channel是一对一的，意思时一个channel.send一个元素，那么也只能channel.receive消费一次。
 
+BroadcastChannel一对多，先让broadcastChannel.openSubscription()获取channel，接着channel.receive()，之后再让BroadcastChannel.send一个元素，注意调用顺序，必须先订阅之后再生产。
 
+```kotlin
+val broadcastChannel = BroadcastChannel<Int>(Channel.BUFFERED)
+    runBlocking {
+        repeat(3) {index->
+            // 启动3个协程
+            launch {
+                // 获取多次管道对象，消费多少
+                val channel = broadcastChannel.openSubscription()
+                channel.receive().let { println("receive$index $it") }
+            }
+        }
+        // 生产一次
+        launch {
+            broadcastChannel.send(10086)
+        }
+    }
+```
 
 
 
 ## 8、多路复用
 
+将多个async构成的deferred传递到select中，优先选择获取数据快的deferred进行输出。
+
+```kotlin
+data class User(var name:String, var age: Int) {}
+
+fun CoroutineScope.getUserFromLocal(name: String) = async(Dispatchers.IO) {
+    delay(1000) // 模拟IO耗时操作
+    User(name,11)
+}
+
+fun CoroutineScope.getUserFromHttp(name: String) = async(Dispatchers.IO) {
+    delay(2000) // 模拟http耗时操作
+    User(name,15)
+}
+
+@Test
+fun selectTest() = runBlocking {
+    launch {
+        val select = select<User> {
+            // 这个耗时短的deferred先返回数据
+            getUserFromLocal("ZhangShan").onAwait{it}
+            getUserFromHttp("LiSi").onAwait{it}
+        }
+        select.let { println("select result: $it") }
+    }.join()
+}
+```
+
+输出结果：
+
+```
+select result: User(name=ZhangShan, age=11)
+```
+
+
+
+**select可以接收那些类型的函数对象？**
+
+- **SelectClause0** ：对应时间没有返回值，例如join没有返回值，那么onJoin就是SelectClauseN类型。
+- **SelectClause1**：对应时间有返回值，onAwait和onReceive都是此类情况。
+- **SelectClause1**：对应事件有返回值，此外还需要一个额外的参数，类如Channel.onSend有两个参数，第一个时Channel类型的值，表示即将发送的值；第二个是发送时的回调参数。
+
+
+
+
+
 ## 9、并发安全
+
+这是并发不安全的，count最终结果不会等于10000
+
+```kotlin
+var count = 0
+List(10000) {
+    GlobalScope.launch {
+        count++
+    }
+}.joinAll()
+println("count = $count")
+```
+
+可以使用java的原子类**AtomicInteger**
+
+```kotlin
+var count = AtomicInteger(0)
+List(10000) {
+    GlobalScope.launch {
+        count.incrementAndGet()
+    }
+}.joinAll()
+```
+
+可以使用**channel**在各协程中修改并发送元素，到另一个协程中获取元素再进行修改和发送。
+
+Mutex：轻量级锁，它的lock和unlock从语义上与线程锁比较类似，之所以轻量是因为它再获取不到锁时不会阻塞线程，二十挂起等待锁的释放。
+
+```kotlin
+var count = 0
+val mutex = Mutex()
+List(10000) {
+    GlobalScope.launch {
+        mutex.withLock {
+            count++
+        }
+    }
+}.joinAll()
+```
+
+Semaphore：轻量级信号量，信号可以有多个，协程在获取到信号量后即可执行并发操作。当Semaphore的参数为1时，效果等价于Mutex。
+
+```kotlin
+var count = 0
+val semaphore = Semaphore(1)
+List(10000) {
+    GlobalScope.launch {
+        semaphore.withPermit {
+            count++
+        }
+    }
+}.joinAll()
+```
 
 
 
@@ -1141,193 +1453,27 @@ println(result) // 输出: Result
 
 总结：
 
-Dispatchers.Main：通过 AndroidDispatcherFactory 构建 HandlerContext，并把mainLooper传进去，最终通过handler.post()的方式完成调度。
+**Dispatchers.Main**：通过 AndroidDispatcherFactory 构建 HandlerContext，并把mainLooper传进去，最终通过handler.post()的方式完成调度。
 
-Dispatchers.Default：实例化DefaultScheduler 配置 线程池参数，底层由**CoroutineScheduler**实现线程池机制，调度任务。
+**Dispatchers.Default**：实例化DefaultScheduler 配置 线程池参数，底层由**CoroutineScheduler**实现线程池机制，调度任务。
 
-Dispatchers.IO：由LimitedParallelism对**CoroutineScheduler**的扩展用法，根据任务的最大并行数量，对新任务排队控制。
+**Dispatchers.IO**：由LimitedParallelism对**CoroutineScheduler**的扩展用法，根据任务的最大并行数量，对新任务排队控制。
 
-Dispatchers.Unconfined：isDispatchNeeded()方法直接返回false，不做调度处理，在当前线程执行任务。
-
-```kotlin
-public actual object Dispatchers {
-    @JvmStatic
-    public actual val Main: MainCoroutineDispatcher get() = MainDispatcherLoader.dispatcher
-    @JvmStatic
-    public val IO: CoroutineDispatcher = DefaultIoScheduler
-    @JvmStatic
-    public actual val Default: CoroutineDispatcher = DefaultScheduler
-    @JvmStatic
-    public actual val Unconfined: CoroutineDispatcher = kotlinx.coroutines.Unconfined
-}
-```
-
-**Dispatchers.Main的创建流程：**
-
-总结：通过 AndroidDispatcherFactory 构建 HandlerContext，并把mainLooper传进去，最终通过handler.post()的方式完成调度。
-
-```kotlin
-// 通过 AndroidDispatcherFactory 构建 HandlerContext，并把mainLooper传进去
-internal class AndroidDispatcherFactory : MainDispatcherFactory {
-
-    override fun createDispatcher(allFactories: List<MainDispatcherFactory>): MainCoroutineDispatcher {
-        val mainLooper = Looper.getMainLooper() ?: throw IllegalStateException("The main looper is not available")
-        return HandlerContext(mainLooper.asHandler(async = true))
-    }
-}
-```
-
-Dispatchers.Main进行调度的时候dispatch() 方法，只不过是用handler往主线程Looper中post任务。
-
-```kotlin
-internal class HandlerContext private constructor(
-    private val handler: Handler,
-    private val name: String?,
-    private val invokeImmediately: Boolean
-) : HandlerDispatcher(), Delay {
-   
-    constructor(
-        handler: Handler,
-        name: String? = null
-    ) : this(handler, name, false)
-
-    ...
-
-    override fun dispatch(context: CoroutineContext, block: Runnable) {
-        // handler内部是mainLooper，所以任务都往主线程放
-        if (!handler.post(block)) {
-            cancelOnRejection(context, block)
-        }
-    }
-}
-```
+**Dispatchers.Unconfined**：isDispatchNeeded()方法直接返回false，不做调度处理，在当前线程执行任务。
 
 
 
-**Dispatchers.Default创建流程**
-
-总结：实例化DefaultScheduler 配置 线程池参数，底层由coroutineScheduler实现线程池机制，调度任务。
-
-```kotlin
-// 指向的就是DefaultScheduler，底层有线程池
-internal object DefaultScheduler : SchedulerCoroutineDispatcher(
-    CORE_POOL_SIZE, MAX_POOL_SIZE, // 仅仅配置线程池的参数
-    IDLE_WORKER_KEEP_ALIVE_NS, DEFAULT_SCHEDULER_NAME
-) {
-    ...
-}
-```
-
-```kotlin
-internal open class SchedulerCoroutineDispatcher(
-    private val corePoolSize: Int = CORE_POOL_SIZE,
-    private val maxPoolSize: Int = MAX_POOL_SIZE,
-    private val idleWorkerKeepAliveNs: Long = IDLE_WORKER_KEEP_ALIVE_NS,
-    private val schedulerName: String = "CoroutineScheduler",
-) : ExecutorCoroutineDispatcher() {
-
-    override val executor: Executor
-    get() = coroutineScheduler
-
-    // This is variable for test purposes, so that we can reinitialize from clean state
-    private var coroutineScheduler = createScheduler()
-
-    private fun createScheduler() =
-    CoroutineScheduler(corePoolSize, maxPoolSize, idleWorkerKeepAliveNs, schedulerName)
-
-    // 任务会调度到线程池中
-    override fun dispatch(context: CoroutineContext, block: Runnable): Unit = coroutineScheduler.dispatch(block)
-}
-```
 
 
 
-**Dispatchers.IO的创建流程：**
-
-总结：由limitedParallelism对coroutineScheduler的扩展用法，根据任务的最大并行数量，对新任务排队控制。
-
-```kotlin
-// 直接指向DefaultIoScheduler
-internal object DefaultIoScheduler : ExecutorCoroutineDispatcher(), Executor {
-    // default就是LimitedDispatcher
-    private val default = UnlimitedIoScheduler.limitedParallelism(
-        // systemProp这个方法是jvm根据CPU核心数计算的最大并行任务数量
-        systemProp(
-            IO_PARALLELISM_PROPERTY_NAME,
-            64.coerceAtLeast(AVAILABLE_PROCESSORS)
-        )
-    )
-    
-    ...
-    override fun dispatch(context: CoroutineContext, block: Runnable) {
-        default.dispatch(context, block)
-    }
-}
-```
-
-```kotlin
-public open fun limitedParallelism(parallelism: Int): CoroutineDispatcher {
-    parallelism.checkParallelism()
-    // this 就是 UnlimitedIoScheduler，当调用LimitedDispatcher的dispatch(),也会调用的UnlimitedIoScheduler的dispatch()
-    return LimitedDispatcher(this, parallelism)
-}
-```
-
-```kotlin
-private object UnlimitedIoScheduler : CoroutineDispatcher() {
-
-    @InternalCoroutinesApi
-    override fun dispatchYield(context: CoroutineContext, block: Runnable) {
-        DefaultScheduler.dispatchWithContext(block, BlockingContext, true)
-    }
-
-    override fun dispatch(context: CoroutineContext, block: Runnable) {
-        // 最终会走到coroutineScheduler中
-        DefaultScheduler.dispatchWithContext(block, BlockingContext, false)
-    }
-}
-```
 
 
 
-**Dispatchers.Unconfined的创建流程：**
-
-总结：isDispatchNeeded()方法直接返回false，不做调度处理，在当前线程执行任务。
-
-```kotlin
-internal object Unconfined : CoroutineDispatcher() {
-
-    // 在调用dispatch()之前会判断isDispatchNeeded()是否返回true，否则不进行调度，在当前线程执行任务
-    override fun isDispatchNeeded(context: CoroutineContext): Boolean = false
-
-  
-}
-```
-
-```kotlin
-// DispatchedContinuation
-verride fun resumeWith(result: Result<T>) {
-        val context = continuation.context
-        val state = result.toState()
-    	// 调度器Dispatchers.Unconfined，isDispatchNeeded()直接返回false
-        if (dispatcher.isDispatchNeeded(context)) {
-            _state = state
-            resumeMode = MODE_ATOMIC
-            dispatcher.dispatch(context, this)
-        } else {
-            // 将任务进行缓存，串行执行任务
-            executeUnconfined(state, MODE_ATOMIC) {
-                withCoroutineContext(this.context, countOrElement) {
-                    continuation.resumeWith(result)
-                }
-            }
-        }
-    }
-```
 
 
 
-## 二、内联的用途和实现原理
+
+# 二、内联的用途和实现原理
 
 Kotlin 中的**内联函数**（Inline Functions）是一种优化技术，主要用于减少高阶函数（Higher-Order Functions）带来的运行时开销。通过将函数体直接插入到调用处，内联函数可以避免创建额外的匿名类和对象，从而提高性能。
 
@@ -1335,13 +1481,13 @@ Kotlin 中的**内联函数**（Inline Functions）是一种优化技术，主�
 
 ------
 
-### **内联函数的作用**
+**内联函数的作用**
 
 在 Kotlin 中，高阶函数（即接受函数作为参数或返回函数的函数）会带来一定的运行时开销，因为每个函数参数都会被编译成一个匿名类的实例。内联函数通过将函数体直接复制到调用处，避免了这种开销。
 
 
 
-## 三.kotlin 内联inline、crossinline、noinline的区别
+# 三.kotlin 内联inline、crossinline、noinline的区别
 
 在 Kotlin 中，`inline`、`crossinline` 和 `noinline` 是用于修饰高阶函数中 lambda 表达式的关键字，它们的作用如下：
 
@@ -1426,9 +1572,9 @@ fun main() {
 
 
 
-## 四、whit、run、let、apply、also
+# 四、whit、run、let、apply、also
 
-## 核心区别总结
+### 核心区别总结
 
 | 函数    | 上下文对象引用 | 返回值     | 是否扩展函数 | 主要用途      |
 | :------ | :------------- | :--------- | :----------- | :------------ |
@@ -1438,7 +1584,7 @@ fun main() {
 | `apply` | `this`         | 对象本身   | 是           | 对象初始化    |
 | `also`  | `it`           | 对象本身   | 是           | 附加操作      |
 
-## 详细解析
+详细解析
 
 ### 1. `let`
 
@@ -1554,7 +1700,7 @@ val file = File("test.txt").also {
 }
 ```
 
-## 选择指南
+### 选择指南
 
 1. **需要返回值吗？**
    - 需要返回值：`let`、`run`、`with`
@@ -1569,7 +1715,7 @@ val file = File("test.txt").also {
    - 复杂计算：`run`
    - 集中操作已有对象：`with`
 
-## 记忆技巧
+### 记忆技巧
 
 - **A**pply 和 **A**lso 都返回对象本身（A开头）
 - **L**et 和 **R**un 都返回代码块结果（L/R开头）
