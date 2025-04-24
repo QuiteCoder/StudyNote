@@ -434,20 +434,11 @@ public static Choreographer getInstance() {
        
         //这个的onVsync方法是什么时候调用的呢？
         //我们知道Android没16.6ms都会刷新一次屏幕，原理其实就是这个Vsync导致的
-        //这个Vsync信号是从底层传递上来的
+        //这个Vsync信号是从底层传递上来的，非主线程的回调
         //onVsync这个方法也是通过jni从底层调用上来，这个方法不会被java层调用
         //每16.6ms调用一次
         @Override
         public void onVsync(long timestampNanos, int builtInDisplayId, int frame) {
-            // Ignore vsync from secondary display.
-            // This can be problematic because the call to scheduleVsync() is a one-shot.
-            // We need to ensure that we will still receive the vsync from the primary
-            // display which is the one we really care about.  Ideally we should schedule
-            // vsync for a particular display.
-            // At this time Surface Flinger won't send us vsyncs for secondary displays
-            // but that could change in the future so let's log a message to help us remember
-            // that we need to fix this.
-
             mTimestampNanos = timestampNanos;
             mFrame = frame;
             Message msg = Message.obtain(mHandler, this);

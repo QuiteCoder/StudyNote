@@ -20,9 +20,13 @@ void recycleUnchecked() {
 
 
 
-## 2、`Handler` 与MessageQueue是一对一？
+## 2、`Handler` 与MessageQueue是多对一？
 
-是多对一，想一想，在Activity中可以创建很多个Handler，默认绑定了mainLooper
+是多对一，想一想，在Activity中可以创建很多个Handler，在主线程创建Handler默认绑定了mainLooper，子线程创建Handler就默认绑定子线程Looper，
+
+也可以指定绑定主线程或子线程的Looper。
+
+
 
 
 
@@ -129,6 +133,7 @@ public final class Looper {
 
 ```java
 public final class Message implements Parcelable {
+    private static final int MAX_POOL_SIZE = 50;
 	public static Message obtain() {
         synchronized (sPoolSync) {
             if (sPool != null) {
@@ -159,7 +164,7 @@ public final class Message implements Parcelable {
         data = null;
 
         synchronized (sPoolSync) {
-            if (sPoolSize < MAX_POOL_SIZE) {
+            if (sPoolSize < MAX_POOL_SIZE) { // 默认缓存容量是50个
                 next = sPool;
                 sPool = this;
                 sPoolSize++;
@@ -236,7 +241,71 @@ boolean enqueueMessage(Message msg, long when) {
 
 
 
-## 5、`MessageQueue` 获取消息是怎么等待
+## 5、`MessageQueue` 消费message与阻塞
+
+### 消费：
+
+总结：loop死循环 -> loopOnce () {
+
+​		 mQueue.next() -> msg.target.dispatchMessage(msg) -> handler.dispatchMessage() {
+
+​			message.callback.run()  或者  mCallback.handleMessage(msg)
+
+​		}  } 
+
+注意：msg.target 就是 handler本身
+	   message.callback 就是 handler.post(Runnable)的Runnable，或者是 Message.obtain(mHandler, Runnable) 的Runnable
+
+```java
+// Looper.java
+public static void loop() {
+    ...
+        for (;;) {
+            if (!loopOnce(me, ident, thresholdOverride)) {
+                return;
+            }
+        }
+}
+
+private static boolean loopOnce(final Looper me,
+                                final long ident, final int thresholdOverride) {
+    Message msg = me.mQueue.next(); // might block
+
+    ...
+        try {
+            // taget就是Handler
+            msg.target.dispatchMessage(msg);
+            ...
+        }
+    ...
+}
+```
+
+
+
+```java
+// Handler.java
+public void dispatchMessage(@NonNull Message msg) {
+    if (msg.callback != null) {
+        handleCallback(msg);
+    } else {
+        if (mCallback != null) {
+            if (mCallback.handleMessage(msg)) {
+                return;
+            }
+        }
+        handleMessage(msg);
+    }
+}
+
+private static void handleCallback(Message message) {
+    message.callback.run();
+}
+```
+
+
+
+### 阻塞：
 
 通过 `epoll` 进行等待和唤醒
 在取消息`next()` 方法中，如果当前消息队列为空，则调用 `nativePollOnce`  那么`Looper`就会处于阻塞/休眠状态；
@@ -682,7 +751,20 @@ Android中的Looper通过结合Java层和Native层的机制实现阻塞与唤醒
    - 当通过`Handler`发送消息时，消息被插入`MessageQueue`。若新消息需要立即处理（如插入队首或执行时间早于当前队首消息），则调用`nativeWake()`。
    - `nativeWake()`向Native层的文件描述符写入数据，触发`epoll`检测到可读事件，从而解除阻塞。
 
-
+```java
+MessageQueue.java
+boolean enqueueMessage(Message msg, long when) {
+        ...
+        synchronized (this) {
+            ...
+            if (needWake) {
+                // nativePollOnce阻塞主线程之后就在这里唤醒
+                nativeWake(mPtr);
+            }
+        }
+        return true;
+    }
+```
 
 
 

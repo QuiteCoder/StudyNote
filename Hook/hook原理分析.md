@@ -31,11 +31,7 @@ YAHFA：https://github.com/PAGalaxyLab/YAHFA  Supports 5.0 ~ 12
 
 在 Java 类中声明一个 Native 方法，用于获取 `ArtMethod` 的指针（以 `long` 类型返回）：
 
-java
-
-复制
-
-```
+```java
 public class ArtUtils {
     // 获取方法的 ArtMethod 指针
     public static native long getArtMethod(Method method);
@@ -46,11 +42,7 @@ public class ArtUtils {
 
 在 Native 代码（C++）中，将 `jmethodID` 转换为 `ArtMethod*`：
 
-cpp
-
-复制
-
-```
+```cpp
 #include <jni.h>
 #include <cstdint>
 
@@ -68,11 +60,7 @@ Java_com_example_ArtUtils_getArtMethod(JNIEnv* env, jclass clazz, jobject method
 
 在 Java 中调用该方法获取 `ArtMethod` 指针：
 
-java
-
-复制
-
-```
+```java
 import java.lang.reflect.Method;
 
 public class Main {
@@ -98,11 +86,7 @@ public class Main {
 
 以 Android 10（API 29）为例，`entry_point_` 偏移量为 `8`：
 
-cpp
-
-复制
-
-```
+```cpp
 // 获取 entry_point_ 的地址
 uintptr_t entryPoint = *reinterpret_cast<uintptr_t*>(artMethodPtr + 8);
 ```
@@ -111,11 +95,7 @@ uintptr_t entryPoint = *reinterpret_cast<uintptr_t*>(artMethodPtr + 8);
 
 通过解析 `libart.so` 的符号或特征码，动态获取偏移量（需 root 权限）：
 
-cpp
-
-复制
-
-```
+```cpp
 // 伪代码：通过符号查找偏移量
 uintptr_t getEntryPointOffset() {
     void* artMethodSym = dlsym(RTLD_DEFAULT, "_ZN3art9ArtMethod13entry_point_");
@@ -135,7 +115,7 @@ cpp
 
 复制
 
-```
+```cpp
 #include <jni.h>
 #include <cstdint>
 #include <sys/mman.h>
@@ -176,11 +156,7 @@ Java_com_example_ArtUtils_hookMethod(JNIEnv* env, jclass clazz, jlong artMethodP
 
 #### **(2) Java 调用**
 
-java
-
-复制
-
-```
+```java
 // 调用 Native 方法进行 Hook
 ArtUtils.hookMethod(artMethodPtr);
 ```

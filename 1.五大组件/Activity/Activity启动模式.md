@@ -1,5 +1,12 @@
 # 启动模式
 
+
+
+总结：sandard，标准栈模式，先入后出，可重复创建activity
+	   singleTop，栈顶复用模式，非栈顶activity可重复创建
+           singleTask，栈内复用模式，栈内只存在一个实例，把栈顶对象清除，把自己放栈顶
+	   singleInstance，单实例模式，独自在另一个栈中，并且不会存在第二个实例
+
 Activity有四种加载模式：standard(默认)， singleTop， singleTask和 singleInstance。以下逐一举例说明他们的区别：
 
 standard：Activity的默认加载方法，即使某个Activity在 Task栈中已经存在，另一个activity通过Intent跳转到该activity，同样会新创建一个实例压入栈中。例如：现在栈的情况为：A B C D，在D这个Activity中通过Intent跳转到D，那么现在的栈情况为： A B C D D 。此时如果栈顶的D通过Intent跳转到B，则栈情况为：A B C D D B。此时如果依次按返回键，D  D C B A将会依次弹出栈而显示在界面上。

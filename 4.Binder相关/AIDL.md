@@ -135,7 +135,7 @@ public class Book implements Parcelable{
 }
 ```
 
-##### 
+
 
 ## 三、远程服务端Service的实现
 
@@ -197,7 +197,7 @@ public class BookManagerService extends Service {
 }
 ```
 
-##### 
+
 
 ## 四、客户端的实现
 
@@ -260,7 +260,7 @@ public class BookManagerActivity extends Activity{
 }
 ```
 
-##### 需要注意的地方
+需要注意的地方
 
 1. 要往子进程传递一个监听类如：`IOnNewBookArrivedListener `，那么该类必须是Binder的子类；由于跨进程通讯该监听类会序列化传递到子进程再反序列化重新生成一个对象，所以用普通的List去存储监听类是无法移除的；这里要使用`RemoteCallbackList`的`register`方法和`unregister`来存取；
    * 由于跨进程传输对象的底层Binder对象是同一个，`RemoteCallbackList`便是使用这一点来进行添加移除
@@ -289,7 +289,7 @@ RemoteCallbackList 清空listener的情况
 
 
 
-##### 跨进程内存泄漏
+### 跨进程内存泄漏
 
 在跨进程调用IPC方法，即当前进程传递回调监听`Listener`到目标进程，在取消监听后该`Listener`不会立马被回收，会存入一个静态链表`ReferenceQueue`中，有一个专门的守护线程去维护这个链表，当该线程执行的时候会弹出里面的对象，执行他们的`finalize`方法，下次执行GC时才会被回收。
 
@@ -309,21 +309,19 @@ Android9.0起（含9.0）对象会被`Cleaner`持有并存入`ReferenceQueue`：
 
 
 
-##### 关于 oneway
+### 关于 oneway
 
 ```java
-package com.test.aidl;
-import com.test.aidl.Book;
-
-interface IBookListener {
-    // 用法是在定义方法前加多oneway的关键字
-    oneway void handlerBook(out Book book);
+interface IPlayer {
+    oneway void start();//异步，假设执行2秒
+    oneway void stop();//异步，假设执行2秒
+    int getVolume();// 同步，假设执行1秒
 }
 ```
 
 主要有两个特征：
 
-* 异步调用：异步调用时指 client 向 binder 驱动发送数据后不用挂起线程等待 binder 驱动回复，直接结束，比如 AMS 调用应用进程启动 Activity，这样那么应用程序做了耗时操作也不回阻塞系统服务
+* 异步调用：异步调用时指 client 向 binder 驱动发送数据后不用挂起线程等待 binder 驱动回复，直接结束，比如 AMS 调用应用进程启动 Activity，这样那么应用程序做了耗时操作也不会阻塞系统服务
 * 串行化处理：指对于一个服务端的 AIDL 接口而言，所有的 oneway 方法不会同时执行，binder 驱动会将他们串行化处理，排队一个个调用
 
 binder 协议：
@@ -338,6 +336,15 @@ oneway 情况：
 
 由外部发送给 binder 驱动的都是 BC 开头，binder 驱动往外发的都是 BR 开头
 
-问：怎么理解客户端线程挂起等待呢？有没有实际占用 CPU 的调度？
+#### oneway的实现原理：
 
-答：等待 binder 驱动返回数据相对于线程的 sleep 操作，底层调用的是 waiteventinterruptible() linux 系统函数，所以不会占用 CPU
+- Binder底层会**创建线程**异步处理任务，保证多个进程调用多个oneway方法并行调用
+- 当多个进程 调用 **同一个进程**的oneway方法时，则需要排队，内部通过判断是否访问同一个`binder_node`（Binder进程），如果是就把
+  这次 Binder_work 放到 binder_node 的 async_todo 队列中，不会立刻执行
+
+
+
+**问：怎么理解客户端线程挂起等待呢？有没有实际占用 CPU 的调度？**
+
+答：等待 binder 驱动返回数据相对于线程的 sleep 操作，底层调用的是 wait_event_interruptible() linux 系统函数，所以不会占用 CPU
+

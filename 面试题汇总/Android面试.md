@@ -312,7 +312,7 @@ LruCache 和磁盘缓存 DiskLruCache，两者都是基于 LRU（Lest Resently U
 
 - singleTop：如果某个Activity自己激活自己，即任务栈栈顶就是该Activity，则不需要创建，其余情况都要创建Activity实例。
 
-- singleTask：如果要激活的那个Activity在任务栈中存在该实例，则不需要创建，只需要把此Activity放入栈顶，并把该Activity以上的Activity实例都pop。
+- singleTask：如果要激活的那个Activity在任务栈中存在该实例，则不需要创建，只需要把此Activity放入栈顶，并把该Activity以上的Activity实例都销毁。
 
 - singleInstance：如果应用1的任务栈中创建了MainActivity实例，如果应用2也要激活MainActivity，则不需要创建，两应用共享该Activity实例。
 
@@ -468,6 +468,8 @@ Caused by: java.lang.ClassNotFoundException: com.hpf.customview.data.MySerializa
 
 
 ## 10、如何在任意地方为当前Activity添加View
+
+ActivityLifecycleCallbacks可以观察到每个Activity的生命周期，通过Application注册
 
 ```java
 class MyActivityLifecycleCallbacks implements ActivityLifecycleCallbacks {
@@ -759,7 +761,7 @@ protected synchronized void timToSize(long size) {
 
 例如：图片宽200 x 300像素
 
-（1）png图片，推荐使用ARGB_8888解码，带有透明通道，并且颜色都是8bit，一个通道占用了一个字节，占用内存大小为：200 x 300 x 占用字节数 。
+（1）png图片，推荐使用ARGB_8888解码，带有透明通道，并且颜色都是8bit，一个通道占用了一个字节，占用内存大小为：**200 x 300 x 占用字节数** 。
 
 ARGB_4444， 占16bit，2个字节
 

@@ -357,7 +357,7 @@ public interface IBookManager extends android.os.IInterface
 
 
 
-客户端
+#### 客户端
 
 ```java
 IBookManager mBookManager;
@@ -400,7 +400,7 @@ IBookManager mBookManager;
 
 
 
-服务端
+#### 服务端
 
 ```java
 public class RemoteService extends Service {
@@ -469,6 +469,8 @@ public class RemoteService extends Service {
 
 
 
+#### 总结：
+
 1、客户端执行bindService()，让服务端在ServiceManager注册Binder服务：服务端在onBind()返回了binder ，binder = new IBookManager.Stub()，继承自Binder；
 
 2、客户端连接成功，在onServiceConnected收到了ServiceManager的包装过的binder，到了客户端就是BinderProxy，
@@ -478,3 +480,263 @@ mBookManager = IBookManager.Stub.asInterface(service);//这里的service就是Bi
 BinderProxy传给Stub的内部类Proxy，然后给mRemote赋值，所以**mRemote就是BinderProxy**。
 
 3、当客户端调用mBookManager 的接口时，相当于调用BinderProxy的接口，经过Binder 驱动转换后才正式调用服务端的Binder对象的接口；
+
+
+
+##### 关于 oneway
+
+```java
+package com.test.aidl;
+import com.test.aidl.Book;
+
+interface IBookListener {
+    // 用法是在定义方法前加多oneway的关键字
+    oneway void handlerBook(out Book book);
+}
+```
+
+主要有两个特征：
+
+* 异步调用：异步调用时指 client 向 binder 驱动发送数据后不用挂起线程等待 binder 驱动回复，直接结束，比如 AMS 调用应用进程启动 Activity，这样那么应用程序做了耗时操作也不会阻塞系统服务
+* 串行化处理：指对于一个服务端的 AIDL 接口而言，所有的 oneway 方法不会同时执行，binder 驱动会将他们串行化处理，排队一个个调用
+
+binder 协议：
+
+非 oneway 情况
+
+<img src="E:\StudyNote\4.Binder相关\aidl_interruptible.webp" style="zoom:50%;" />
+
+oneway 情况：
+
+<img src="E:\StudyNote\4.Binder相关\aidl_oneway.webp" style="zoom:50%;" />
+
+由外部发送给 binder 驱动的都是 BC 开头，binder 驱动往外发的都是 BR 开头
+
+问：怎么理解客户端线程挂起等待呢？有没有实际占用 CPU 的调度？
+
+答：等待 binder 驱动返回数据相对于线程的 sleep 操作，底层调用的是 wait_event_interruptible() linux 系统函数，所以不会占用 CPU
+
+
+
+
+
+### 三、Binder内存
+
+问题：一次Binder通信最大可以传输多大的数据？
+
+答案：oneway的情况只有(1M-8k) /2 = 508kb ， 非oneway的情况有 1M
+
+
+
+```
+frameworks/native/libs/binder/ProcessState.cpp
+```
+
+```cpp
+#define BINDER_VM_SIZE ((1 * 1024 * 1024) - sysconf(_SC_PAGE_SIZE) * 2)//这里的限制是1MB-4KB*2
+ 
+ProcessState::ProcessState(const char *driver)
+{
+    if (mDriverFD >= 0) {
+        // mmap the binder, providing a chunk of virtual address space to receive transactions.
+        // 调用mmap接口向Binder驱动中申请内核空间的内存
+        mVMStart = mmap(0, BINDER_VM_SIZE, PROT_READ, MAP_PRIVATE | MAP_NORESERVE, mDriverFD, 0);
+        if (mVMStart == MAP_FAILED) {
+            // *sigh*
+            ALOGE("Using %s failed: unable to mmap transaction memory.\n", mDriverName.c_str());
+            close(mDriverFD);
+            mDriverFD = -1;
+            mDriverName.clear();
+        }
+    }
+}
+```
+
+如果一个进程使用ProcessState这个类来初始化Binder服务，这个进程的Binder内核内存上限就是BINDER_VM_SIZE，也就是1MB-8KB。
+
+```
+frameworks/base/cmds/app_process/app_main.cpp
+```
+
+```cpp
+virtual void onZygoteInit()
+{
+    sp<ProcessState> proc = ProcessState::self();
+    ALOGV("App process: starting thread pool.\n");
+    proc->startThreadPool();
+}
+```
+
+对于普通的APP来说，我们都是Zygote进程孵化出来的，Zygote进程的初始化Binder服务的时候提前调用了ProcessState这个类，所以普通的APP跨进程上限就是1MB-8KB。
+
+
+
+**能否不用ProcessState来初始化Binder服务，来突破1M-8KB的限制？**
+
+答案是当然可以了，Binder服务的初始化有两步，open打开Binder驱动，mmap在Binder驱动中申请内核空间内存，所以我们只要手写open，mmap就可以轻松突破这个限制。源码中已经给了类似的例子。
+
+```
+frameworks/native/cmds/servicemanager/bctest.c
+```
+
+```cpp
+int main(int argc, char **argv)
+{
+    struct binder_state *bs;
+    uint32_t svcmgr = BINDER_SERVICE_MANAGER;
+    uint32_t handle;
+    bs = binder_open("/dev/binder", 128*1024);//我们可以把这个数值改成2*1024*1024就可以突破这个限制了
+    if (!bs) {
+        fprintf(stderr, "failed to open binder driver\n");
+        return -1;
+    }
+}
+```
+
+```
+frameworks/native/cmds/servicemanager/binder.c
+```
+
+```cpp
+struct binder_state *binder_open(const char* driver, size_t mapsize)
+{
+    ...//省略部分代码
+    bs->fd = open(driver, O_RDWR | O_CLOEXEC);
+    ....//省略部分代码
+    bs->mapsize = mapsize;//这里mapsize=128*1024
+    bs->mapped = mmap(NULL, mapsize, PROT_READ, MAP_PRIVATE, bs->fd, 0);
+    ....//省略部分代码
+}
+```
+
+**难道Binder驱动不怕我们传递一个超级大的数字进去吗？**
+
+其实是我们想多了，在Binder驱动中mmap的具体实现中还有一个4M的限制 /drivers/staging/android/binder.c
+
+```cpp
+static int binder_mmap(struct file *filp, struct vm_area_struct *vma)
+{
+    int ret;
+    struct vm_struct *area;
+    struct binder_proc *proc = filp->private_data;
+    const char *failure_string;
+    struct binder_buffer *buffer;
+ 
+    if (proc->tsk != current)
+        return -EINVAL;
+ 
+    if ((vma->vm_end - vma->vm_start) > SZ_4M)
+        vma->vm_end = vma->vm_start + SZ_4M;//如果申请的size大于4MB了，会在驱动中被修改成4MB
+ 
+    binder_debug(BINDER_DEBUG_OPEN_CLOSE,
+             "binder_mmap: %d %lx-%lx (%ld K) vma %lx pagep %lx\n",
+             proc->pid, vma->vm_start, vma->vm_end,
+             (vma->vm_end - vma->vm_start) / SZ_1K, vma->vm_flags,
+             (unsigned long)pgprot_val(vma->vm_page_prot));
+```
+
+**结论**
+
+1. 通过手写open，mmap初始化Binder服务的限制是4MB
+2. 通过ProcessState初始化Binder服务的限制是1MB-8KB
+
+**4M或1MB-8KB这个答案是不是正确？**
+
+我发现一处代码 /drivers/staging/android/binder.c
+
+```cpp
+static int binder_mmap(struct file *filp, struct vm_area_struct *vma)
+{
+     //省内部分代码
+    proc->free_async_space = proc->buffer_size / 2;//这个代码引起我注意，async代码异步的意思
+    barrier();
+    proc->files = get_files_struct(current);
+    proc->vma = vma;
+    proc->vma_vm_mm = vma->vm_mm;
+```
+
+```cpp
+static struct binder_buffer *binder_alloc_buf(struct binder_proc *proc,
+                          size_t data_size,
+                          size_t offsets_size, int is_async)
+{
+ 
+    //省略部分代码
+    if (is_async &&
+        proc->free_async_space < size + sizeof(struct binder_buffer)) {
+        //对于oneway的Binder调用，可申请内核空间，最大上限是buffer_size的一半，也就是mmap时候传递的值的一半。
+        binder_debug(BINDER_DEBUG_BUFFER_ALLOC,
+                 "%d: binder_alloc_buf size %zd failed, no async space left\n",
+                  proc->pid, size);
+        return NULL;
+    }
+```
+
+为什么要做这样子的限制，我的猜想是Binder调用中同步调用优先级大于oneway（异步）的调用，为了充分满足同步调用的内存需要，所以将oneway调用的内存限制到申请内存上限的一半。
+
+
+
+
+
+### 四、AIDL安全校验
+
+总结：可以通过UID和包名，甚至可以配置权限来进行校验。
+
+方案一：重写onTransact，从Binder中获取调用者的UID，通过UID来判断包名
+
+```java
+//这里实现了aidl中的抽象函数
+private final IMyService.Stub mBinder = new IMyService.Stub() {
+    
+    @Override
+    public boolean onTransact(int code, Parcel data, Parcel reply, int flags)
+            throws RemoteException {
+        // 包名未验证通过
+        if (!hasPermission(this)) {
+            return false;
+        }
+        return super.onTransact(code, data, reply, flags);
+    }
+};
+
+
+// 调用者白名单
+private String[] callerList = {"com.android.mms"};
+
+public boolean hasPermission(Binder binder) {
+    // 默认不允许通过
+    boolean hasPermission = false;
+    //
+    String callerPackageName = null;
+    // 获取调用者包名
+    String[] packages = getPackageManager().getPackagesForUid(binder.getCallingUid());
+    if (packages != null && packages.length > 0) {
+        callerPackageName = packages[0];
+    }
+    if (!TextUtils.isEmpty(callerPackageName)) {
+        for (int i = 0; i < callerList.length; i++) {
+            // 有权限的调用者
+            String permissionCaller = callerList[i];
+            // 包名相同，则验证通过
+            if (callerPackageName.startsWith(permissionCaller)) {
+                hasPermission = true;
+            }
+        }
+    }
+    return hasPermission;
+}
+```
+
+
+
+方案二：
+
+在服务端添加权限，在清单文件里配置权限字段
+
+客户端一样需要配置一样的权限
+
+在调用service的过程中可以设置任意细化的许可。这是通过Context.checkCallingPermission()方法来完成的。需要注意的是这种情况只能发生在来自另一个进程的呼叫，通常是一个service发布的AIDL接口或者是其他方式提供给其他的进程。
+　　Android提供了很多其他的方式用于检查permissions。如果你有另一个进程的pid，你就可以通过Context.checkPermission(String, int, int)去针对那个pid去检查permission。如果你有另一个应用程序的package name，你可以直接用PackageManager的方法PackageManager.checkPermission(String, String)来确定该package是否已经拥有了相应的权限。
+————————————————
+
+原文链接：https://blog.csdn.net/CodeCoderLee/article/details/49131701
