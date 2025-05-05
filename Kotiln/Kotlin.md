@@ -341,7 +341,7 @@ final class com/example/studykotlin/MainActivity$onCreate$button$1$1 extends kot
 
 2.最为关键的就是**invokeSuspend**这个方法，这是协程的入口。
 
-> 其中使用状态机的机制，每个挂起函数都会对应一个状态，当挂起函数返回COROUTINE_SUSPENDED，协程被挂起，挂起方法下方的代码就无法被执行，比如button.text = string就无法被执行；
+> 其中使用状态机的机制，每个挂起函数都会对应一个状态，当挂起函数返回**COROUTINE_SUSPENDED**，协程被挂起，挂起方法下方的代码就无法被执行，比如button.text = string就无法被执行；
 >
 > 挂起函会在一个续体中执行完成，若顺利则返回RESUMED，恢复协程，再次调用invokeSuspend方法，将结果从方法参数中Object 类型的result 中返回，这时候挂起方法下方的代码就会获取到结果，button.text = string。
 
@@ -797,7 +797,7 @@ internal inner class Worker private constructor() : Thread() {
 
 ```kotlin
 internal const val BUFFER_CAPACITY_BASE = 7
-internal const val BUFFER_CAPACITY = 1 shl BUFFER_CAPACITY_BASE
+internal const val BUFFER_CAPACITY = 1 shl BUFFER_CAPACITY_BASE //1 往左位运算7位是128
 internal class WorkQueue {
     private val buffer: AtomicReferenceArray<Task?> = AtomicReferenceArray(BUFFER_CAPACITY)
     private fun addLast(task: Task): Task? {
