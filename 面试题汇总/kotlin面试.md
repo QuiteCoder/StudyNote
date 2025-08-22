@@ -138,184 +138,13 @@ class FetchDataStateMachine : Continuation<String> {
 
 **Dispatchers.Main**：通过 AndroidDispatcherFactory 构建 HandlerContext，并把mainLooper传进去，最终通过handler.post()的方式完成调度。
 
-**Dispatchers.Default**：实例化DefaultScheduler 配置 线程池参数，底层由**CoroutineScheduler**实现线程池机制，调度任务。
+**Dispatchers.Default**：实例化DefaultScheduler 配置 线程池参数，底层由**CoroutineScheduler**实现线程池机制，调度任务。**dispatch时没有传TaskContext， 默认= NonBlockingContext**，就是根据这个参数来区分是否要创建更多线程，所以最多也只创建核心线程，不会超过核心线程数。
 
-**Dispatchers.IO**：由LimitedParallelism对**CoroutineScheduler**的扩展用法，根据任务的最大并行数量，对新任务排队控制。
+**Dispatchers.IO**：调用的是Dispatchers.Default的dispatchWithContext方法，并且TaskContext = TaskContextImpl(TASK_PROBABLY_BLOCKING)，这个理论上无限制创建线程。
 
 **Dispatchers.Unconfined**：isDispatchNeeded()方法直接返回false，不做调度处理，在当前线程执行任务。
 
-```kotlin
-public actual object Dispatchers {
-    @JvmStatic
-    public actual val Main: MainCoroutineDispatcher get() = MainDispatcherLoader.dispatcher
-    @JvmStatic
-    public val IO: CoroutineDispatcher = DefaultIoScheduler
-    @JvmStatic
-    public actual val Default: CoroutineDispatcher = DefaultScheduler
-    @JvmStatic
-    public actual val Unconfined: CoroutineDispatcher = kotlinx.coroutines.Unconfined
-}
-```
 
-**Dispatchers.Main的创建流程：**
-
-总结：通过 AndroidDispatcherFactory 构建 HandlerContext，并把mainLooper传进去，最终通过handler.post()的方式完成调度。
-
-```kotlin
-// 通过 AndroidDispatcherFactory 构建 HandlerContext，并把mainLooper传进去
-internal class AndroidDispatcherFactory : MainDispatcherFactory {
-
-    override fun createDispatcher(allFactories: List<MainDispatcherFactory>): MainCoroutineDispatcher {
-        val mainLooper = Looper.getMainLooper() ?: throw IllegalStateException("The main looper is not available")
-        return HandlerContext(mainLooper.asHandler(async = true))
-    }
-}
-```
-
-Dispatchers.Main进行调度的时候dispatch() 方法，只不过是用handler往主线程Looper中post任务。
-
-```kotlin
-internal class HandlerContext private constructor(
-    private val handler: Handler,
-    private val name: String?,
-    private val invokeImmediately: Boolean
-) : HandlerDispatcher(), Delay {
-   
-    constructor(
-        handler: Handler,
-        name: String? = null
-    ) : this(handler, name, false)
-
-    ...
-
-    override fun dispatch(context: CoroutineContext, block: Runnable) {
-        // handler内部是mainLooper，所以任务都往主线程放
-        if (!handler.post(block)) {
-            cancelOnRejection(context, block)
-        }
-    }
-}
-```
-
-
-
-**Dispatchers.Default创建流程**
-
-总结：实例化DefaultScheduler 配置 线程池参数，底层由coroutineScheduler实现线程池机制，调度任务。
-
-```kotlin
-// 指向的就是DefaultScheduler，底层有线程池
-internal object DefaultScheduler : SchedulerCoroutineDispatcher(
-    CORE_POOL_SIZE, MAX_POOL_SIZE, // 仅仅配置线程池的参数
-    IDLE_WORKER_KEEP_ALIVE_NS, DEFAULT_SCHEDULER_NAME
-) {
-    ...
-}
-```
-
-```kotlin
-internal open class SchedulerCoroutineDispatcher(
-    private val corePoolSize: Int = CORE_POOL_SIZE,
-    private val maxPoolSize: Int = MAX_POOL_SIZE,
-    private val idleWorkerKeepAliveNs: Long = IDLE_WORKER_KEEP_ALIVE_NS,
-    private val schedulerName: String = "CoroutineScheduler",
-) : ExecutorCoroutineDispatcher() {
-
-    override val executor: Executor
-    get() = coroutineScheduler
-
-    // This is variable for test purposes, so that we can reinitialize from clean state
-    private var coroutineScheduler = createScheduler()
-
-    private fun createScheduler() =
-    CoroutineScheduler(corePoolSize, maxPoolSize, idleWorkerKeepAliveNs, schedulerName)
-
-    // 任务会调度到线程池中
-    override fun dispatch(context: CoroutineContext, block: Runnable): Unit = coroutineScheduler.dispatch(block)
-}
-```
-
-
-
-**Dispatchers.IO的创建流程：**
-
-总结：由limitedParallelism对coroutineScheduler的扩展用法，根据任务的最大并行数量，对新任务排队控制。
-
-```kotlin
-internal object DefaultScheduler : ExperimentalCoroutineDispatcher() {
-    val IO: CoroutineDispatcher = LimitingDispatcher(
-        this,
-        systemProp(IO_PARALLELISM_PROPERTY_NAME, 64.coerceAtLeast(AVAILABLE_PROCESSORS)),
-        "Dispatchers.IO",
-        TASK_PROBABLY_BLOCKING
-    )
-    //···
-}
-
-private class LimitingDispatcher(
-    private val dispatcher: ExperimentalCoroutineDispatcher,
-    //···
-) : ExecutorCoroutineDispatcher(), TaskContext, Executor {
-
-    override val executor: Executor
-        get() = this
-
-    override fun execute(command: Runnable) = dispatch(command, false)
-
-    override fun dispatch(context: CoroutineContext, block: Runnable) = dispatch(block, false)
-
-    private fun dispatch(block: Runnable, tailDispatch: Boolean) {
-        var taskToSchedule = block
-        while (true) {
-            //没有超过限制，立即分发任务
-            if (inFlight <= parallelism) {
-                dispatcher.dispatchWithContext(taskToSchedule, this, tailDispatch)
-                return
-            }
-            //任务超过限制，则加入等待队列
-            queue.add(taskToSchedule)
-            //···
-        }
-    }
-}
-```
-
-
-
-**Dispatchers.Unconfined的创建流程：**
-
-总结：isDispatchNeeded()方法直接返回false，不做调度处理，在当前线程执行任务。
-
-```kotlin
-internal object Unconfined : CoroutineDispatcher() {
-
-    // 在调用dispatch()之前会判断isDispatchNeeded()是否返回true，否则不进行调度，在当前线程执行任务
-    override fun isDispatchNeeded(context: CoroutineContext): Boolean = false
-
-  
-}
-```
-
-```kotlin
-// DispatchedContinuation
-verride fun resumeWith(result: Result<T>) {
-        val context = continuation.context
-        val state = result.toState()
-    	// 调度器Dispatchers.Unconfined，isDispatchNeeded()直接返回false
-        if (dispatcher.isDispatchNeeded(context)) {
-            _state = state
-            resumeMode = MODE_ATOMIC
-            dispatcher.dispatch(context, this)
-        } else {
-            // 将任务进行缓存，串行执行任务
-            executeUnconfined(state, MODE_ATOMIC) {
-                withCoroutineContext(this.context, countOrElement) {
-                    continuation.resumeWith(result)
-                }
-            }
-        }
-    }
-```
 
 
 
@@ -327,7 +156,7 @@ DEFAULT：协程创建后，立即开始调度，在调度前如果协程被取�
 
 ATOMIC：协程创建后，立即开始调度，协程执行到第一个挂起点之前不响应取消。
 
-LAZY：只有协程被需要时，包括主动调用协程的start、join或者await等函数时才开始调度，如果调度前就被取消，那么该协程将直接进入异常结束状态（抛出异常）。
+LAZY：只有协程被需要时，包括主动调用协程的start、join或者await等函数时才开始调度，如果调度前就被取消，那么该协程将直接进入异常结束状态（抛出异常）。·
 
 UNDISPATCHED：协程创建后立即在当前函数调用栈中执行，直到遇到第一个真正挂起的点。
 
@@ -1398,7 +1227,7 @@ List(10000) {
 
 ## 问题：
 
-### **（1）launch 和 async的区别？**
+## **（1）launch 和 async的区别？**
 
 launch 示例
 
